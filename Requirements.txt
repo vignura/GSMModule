@@ -1,0 +1,39 @@
+==============
+PINS MAPPINGS:
+==============
+RELAY_OUT			PIN 13 	- Relay out (Normally closed) (0 - ON; 1 - OFF)
+BATT_MON			A0 		- Scaled down Analog Battery volatge 
+RELAY_FEDBK			A1 		- Relay Feedback pin is connected relay output (1 - RELAY ON; 0 - RELAY OFF)
+PULSE_SENSE_PIN 	2|3		- Sense pulse input from external unit
+GSM Module UART (PIN 9 TX, PIN 10 RX) - Software serial (9600 Baud) 
+
+======
+REQ 1: GSM_COMMAND_HANDLER
+======
+CMD: CALL RECEIVED
+Toggle Relay state when a call is received, and read feeback state from FEEDBACK_PIN and 
+send an acknowledgement message with the Feedback pin state back to caller.
+
+======
+REQ 2: OFFSTATE_DETECTION
+======
+System shall not be in OFF state for more than X (30) minutes, user shall be warned if the
+OFF time is exceed by making a call and sending a message to user through the GSM Module. 
+
+======
+REQ 3: LOW_VOLTAGE_DETECTION
+======
+Monitor battery voltage continuosly and shall send warning call and message when LOW VOLTAGE
+Threshold is reached.
+
+======
+REQ 4: SENSE_MONITORING
+======
+Count number of pulses in SENSE_PIN, interrupt on rising edge shall be used for counting pulses. 
+If pulse count over an Interval T (one minute) is below Threshold (100), then initiate SENSE_WARNING.
+
+======
+REQ 5: WARNING_CRITERIA
+======
+Make Call for 10s and followed by a message, warning frequency should be 30 minutes and maximum
+warnings limits should be 10 times.
