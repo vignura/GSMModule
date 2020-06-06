@@ -1,2 +1,3 @@
 https://www.youtube.com/watch?v=nUcrrCJd1sY&feature=youtu.be
 https://www.itead.cc/wiki/SIM900/SIM900A_GSM/GPRS_Minimum_System_Module
+https://lastminuteengineers.com/sim900-gsm-shield-arduino-tutorial/

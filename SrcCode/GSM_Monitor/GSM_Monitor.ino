@@ -13,10 +13,11 @@
 #define GSM_RX_PIN          10
 
 /* command strings and IDs */
-#define CMD_RELAY_TOGGLE_STR                    "Call Received"
+#define GSM_RING_STR                            "RING"
 
 #define CMD_INVALID_CMD_ID                      (-1)
-#define CMD_RELAY_TOGGLE_ID                     0x01
+#define CMD_GSM_CALL_RECV_ID                    0x01
+#define CMD_GSM_INVALID_CALL_RECV_ID            0x02
 
 /* warnings */
 #define OFF_STATE_WARNING                       0x01
@@ -25,15 +26,20 @@
 
 /* system macros */
 #define MAX_DEBUG_MSG_SIZE                      128
-#define MAX_CMD_STRING_SIZE                     32
+#define MAX_CMD_STRING_SIZE                     128
 
 #define GSM_BAUDRATE                            9600
 #define DEBUG_BAUDRATE                          9600
 #define GSM_SERIAL_READ_DELAY_MS                0x02
 
+// ATDxxxxxxxxxx; -- watch out here for semicolon at the end!!
+#define GSM_CONTACT_NUMBER                      "9940398991" 
 #define MAX_OFFSTATE_TIME_SECONDS               (1800UL)
-
 #define LOW_BATT_THRESHOLD                      500
+#define SENSE_MONITOR_PERIOD_SEC                10
+#define SENSE_PULSE_PER_PERIOD                  1
+#define CALL_TIMEOUT_SEC                        10
+#define WARNING_PERIOD_MIN                      (30)
 
 Relay Rly(RELAY_OUT_PIN, RELAY_ON, true /* active low is true */);
 SoftwareSerial SS_GSM(GSM_TX_PIN, GSM_RX_PIN);
@@ -43,6 +49,10 @@ uint8_t g_PreState = Rly.getState();
 
 unsigned long g_ulOFFTime_ms = 0;
 unsigned long g_ulStartime_ms = 0;
+unsigned long g_ulWarStartTime_ms = 0;
+
+/* set this to true by default */
+bool g_bSendWarning = true;
 
 #ifdef PRINT_DEBUG
   char g_arrcMsg[MAX_DEBUG_MSG_SIZE] = {0};
@@ -77,7 +87,7 @@ void setup() {
   #endif
 
   #ifdef PRINT_DEBUG
-      sprintf(g_arrcMsg, "INIT Success");
+      snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "INIT Success");
       Serial.println(g_arrcMsg);
   #endif
 
@@ -108,7 +118,7 @@ void loop() {
   if(iReadBytes > 0)
   {
     #ifdef PRINT_DEBUG
-      sprintf(g_arrcMsg, "Received: [%d] %s", iReadBytes, arrcCmd);
+      snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Received: [%d] %s", iReadBytes, arrcCmd);
       Serial.println(g_arrcMsg);
     #endif
 
@@ -141,7 +151,7 @@ void loop() {
   /* Sense Pin detection */
   if(detectSensePin())
   {
-    ProcessWarning(OFF_STATE_WARNING);
+    ProcessWarning(SENSE_WARNING);
   }
 
 }
@@ -224,26 +234,54 @@ bool isValidCmd(char *parrcCmd, int iCmdLen, int *out_iCmdID)
     return false;
   }
 
-  if (StrnCmp(parrcCmd, CMD_RELAY_TOGGLE_STR, strlen(CMD_RELAY_TOGGLE_STR)) == true)
+  if (StrnCmp(parrcCmd, GSM_RING_STR, strlen(GSM_RING_STR)) == true)
   {
-    /* further string processing */
-
     #ifdef PRINT_DEBUG
-      sprintf(g_arrcMsg,"Toggle command received");
+      snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Call Received");
       Serial.println(g_arrcMsg);
     #endif
 
-    *out_iCmdID = CMD_RELAY_TOGGLE_ID;
+    /* validate caller */
+    if(isVaildCaller(parrcCmd, iCmdLen))
+    {
+      *out_iCmdID = CMD_GSM_CALL_RECV_ID;
+    }
+    else
+    {
+      *out_iCmdID = CMD_GSM_INVALID_CALL_RECV_ID;
+    }
+    
     return true;
   }
   else
   {
     // invalid command
     #ifdef PRINT_DEBUG
-      sprintf(g_arrcMsg,"Invalid Cmd: %s", parrcCmd);
+      snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE,"Invalid Cmd: %s", parrcCmd);
       Serial.println(g_arrcMsg);
     #endif
     *out_iCmdID = CMD_INVALID_CMD_ID;
+  }
+
+  return false;
+}
+/***********************************************************************************************/
+/*! 
+* \fn         :: isValidCmd()
+* \author     :: Vignesh S
+* \date       :: 02-Jun-2020
+* \brief      :: This function validates the caller's mobile number and returns true if the 
+*                number is valid else returns false
+* \param[in]  :: parrcCmd, iCmdLen 
+* \param[out] :: None
+* \return     :: true or false
+*/
+/***********************************************************************************************/
+bool isVaildCaller(char *parrcCmd, int iCmdLen)
+{
+  if (StrnCmp(parrcCmd, GSM_CONTACT_NUMBER, strlen(GSM_CONTACT_NUMBER)) == true)
+  {
+    return true;
   }
 
   return false;
@@ -300,16 +338,26 @@ void CmdProcess(int iCmdID, char *pResponse)
 
   switch(iCmdID)
   {
-    case CMD_RELAY_TOGGLE_ID:
-
-      sprintf(pResponse, "%s", "Response");
-      
+    case CMD_GSM_CALL_RECV_ID:
+      // sprintf(pResponse, "%s", "Response");
+      /* don't answer the call just hangup */
+      HangupCall();
       #ifdef PRINT_DEBUG
-        sprintf(g_arrcMsg, "Toggling RELAY state");
+        snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Valid Call Toggling RELAY");
         Serial.println(g_arrcMsg);
       #endif
       
       Rly.ToggleState();
+    break;
+
+    case CMD_GSM_INVALID_CALL_RECV_ID:
+      /* don't answer the call just hangup */
+      HangupCall();
+
+      #ifdef PRINT_DEBUG
+        snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Invalid Call Hanging up");
+        Serial.println(g_arrcMsg);
+      #endif
     break;
 
     default:
@@ -373,10 +421,11 @@ bool detectOFFState(unsigned long ulOFFTime_Sec)
 * \fn         :: ProcessWarning()
 * \author     :: Vignesh S
 * \date       :: 02-Jun-2020
-* \brief      :: This function processes the recceived command and preforms corresponding task
-* \param[in]  :: ulOFFTime_Sec OFF time threshold in seconds
+* \brief      :: This function processes warnings and initiates a call to GSM_CONTACT_NUMBER
+*                and also sends warning messages
+* \param[in]  :: iWarnID
 * \param[out] :: None
-* \return     :: true | false
+* \return     :: None
 */
 /***********************************************************************************************/
 void ProcessWarning(int iWarnID)
@@ -384,19 +433,41 @@ void ProcessWarning(int iWarnID)
   switch(iWarnID)
   {
     case OFF_STATE_WARNING:
+      snprintf(g_arrcGSMMsg, MAX_CMD_STRING_SIZE, "System is OFF for more than %d minutes", 
+              (MAX_OFFSTATE_TIME_SECONDS / 60));
     break;
 
     case LOW_BATT_WARNING:
+      snprintf(g_arrcGSMMsg, MAX_CMD_STRING_SIZE, "Low Battery WARNING...!");
     break;
 
     case SENSE_WARNING:
+      snprintf(g_arrcGSMMsg, MAX_CMD_STRING_SIZE, "Sense Input WARNING...!");
     break;
 
     deafult:
-      ; /* do nothing */
+      return;
+  }
+
+  /* send consecutive warnings with atleast WARNING_PERIOD_MIN  interval inbetween */
+  if((g_bSendWarning == false) && ((millis() - g_ulWarStartTime_ms) / (1000UL * 60UL) > WARNING_PERIOD_MIN) )
+  {
+    g_bSendWarning = true;
+  }
+  
+  if(g_bSendWarning == true)
+  {
+    /* call and hangup */
+    MakeCall(GSM_CONTACT_NUMBER);
+    delay(CALL_TIMEOUT_SEC * 1000UL);
+
+    /* send message */
+    SendMessage(GSM_CONTACT_NUMBER, g_arrcGSMMsg);
+
+    g_bSendWarning = false;
+    g_ulWarStartTime_ms = millis();
   }
 }
-
 
 /***********************************************************************************************/
 /*! 
@@ -439,5 +510,107 @@ bool detectSensePin()
 {
   bool SenseState = false;
 
+  /* monitor pulse count for every cycle */
+  if((millis() / 1000) % SENSE_MONITOR_PERIOD_SEC)
+  {
+    if(g_vulPulseCount < SENSE_PULSE_PER_PERIOD)
+    {
+      SenseState = true;
+    }
+
+    /* reset the count */
+    g_vulPulseCount = 0;
+  }
+
   return SenseState;
+}
+
+
+/***********************************************************************************************/
+/*! 
+* \fn         :: MakeCall()
+* \author     :: Vignesh S
+* \date       :: 06-Jun-2020
+* \brief      :: This function makes a call to PhNumber
+* \param[in]  :: PhNumber - Phone number (10 digit string)
+* \param[out] :: None
+* \return     :: None
+*/
+/***********************************************************************************************/
+void MakeCall(const char *PhNumber)
+{
+  snprintf(g_arrcGSMMsg, MAX_CMD_STRING_SIZE, "ATD+%s;", PhNumber);
+  SS_GSM.println(g_arrcGSMMsg);
+  #ifdef PRINT_DEBUG
+    snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Calling %s\n", PhNumber);
+    Serial.println(g_arrcMsg);
+  #endif
+}
+
+/***********************************************************************************************/
+/*! 
+* \fn         :: HangupCall()
+* \author     :: Vignesh S
+* \date       :: 06-Jun-2020
+* \brief      :: This function hangups a call
+* \param[in]  :: None
+* \param[out] :: None
+* \return     :: None
+*/
+/***********************************************************************************************/
+void HangupCall()
+{
+  SS_GSM.println("ATH");
+  #ifdef PRINT_DEBUG
+    snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Hangup Call\n");
+    Serial.println(g_arrcMsg);
+  #endif
+  delay(1000);
+}
+
+/***********************************************************************************************/
+/*! 
+* \fn         :: ReceiveCall()
+* \author     :: Vignesh S
+* \date       :: 06-Jun-2020
+* \brief      :: This function sets the GSM module to receive a call 
+* \param[in]  :: None
+* \param[out] :: None
+* \return     :: None
+*/
+/***********************************************************************************************/
+void ReceiveCall()
+{
+  SS_GSM.println("ATA");
+  #ifdef PRINT_DEBUG
+    snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Receiving Call\n");
+    Serial.println(g_arrcMsg);
+  #endif
+}
+
+/***********************************************************************************************/
+/*! 
+* \fn         :: SendMessage()
+* \author     :: Vignesh S
+* \date       :: 06-Jun-2020
+* \brief      :: This function sends a message
+* \param[in]  :: PhNumber - Phone number (10 digit string)
+* \param[in]  :: Message - Message to send
+* \param[out] :: None
+* \return     :: None
+*/
+/***********************************************************************************************/
+void SendMessage(const char *PhNumber, const char *Message)
+{
+  SS_GSM.println("AT+CMGF=1");    //Sets the GSM Module in Text Mode
+  delay(1000);  // Delay of 1000 milli seconds or 1 second
+  
+  snprintf(g_arrcGSMMsg, MAX_CMD_STRING_SIZE, "AT+CMGS=\"+91%s\"\r", PhNumber);
+  SS_GSM.println(g_arrcGSMMsg); 
+  delay(1000);
+
+  SS_GSM.println(Message);// The SMS text you want to send
+  delay(100);
+  SS_GSM.println((char)26);// ASCII code of CTRL+Z
+  delay(1000);
 }
