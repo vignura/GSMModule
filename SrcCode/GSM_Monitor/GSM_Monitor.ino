@@ -14,7 +14,7 @@
 #define GSM_RX_PIN          10
 
 /* command strings and IDs */
-#define GSM_RING_STR                            "\r\nRING"
+#define GSM_RING_STR                            "\r\n+CLIP"
 
 #define CMD_INVALID_CMD_ID                      (-1)
 #define CMD_GSM_CALL_RECV_ID                    0x01
@@ -141,7 +141,7 @@ void loop() {
     if(isValidCmd(arrcCmd, iReadBytes, &iCmdID) == true)
     {
       // if valid command is received, process it
-      // CmdProcess(iCmdID, g_arrcGSMMsg);
+      CmdProcess(iCmdID, g_arrcGSMMsg);
       
       // SS_GSM.println(g_arrcGSMMsg);
     }
@@ -297,11 +297,20 @@ bool isVaildCaller(char *parrcCmd, int iCmdLen)
   int iIndex = 0;
   int iRet = 0;
 
-  for(iIndex = 0; iIndex < MAX_CONTACT_NUMBERS_STORED; iIndex)
+  for(iIndex = 0; iIndex < MAX_CONTACT_NUMBERS_STORED; iIndex++)
   {
-    // iRet = snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "\r\nCLIP: "+91%snprintf",145,"",,"",0", ContactNumbers);
-    if (StrnCmp(&parrcCmd[12], ContactNumbers[iIndex], sizeof(ContactNumbers[iIndex])) == true)
+    // iRet = snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "\r\n+CLIP: "+91%snprintf",145,"",,"",0", ContactNumbers);
+    #ifdef PRINT_DEBUG
+      snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE,"Cmp: %s : %s", parrcCmd, ContactNumbers[iIndex]);
+      Serial.println(g_arrcMsg);
+    #endif
+    if (StrnCmp(&parrcCmd[13], ContactNumbers[iIndex], 10) == true)
     {
+      #ifdef PRINT_DEBUG
+        snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE,"Match found");
+        Serial.println(g_arrcMsg);
+      #endif
+      
       return true;
     }
   }
