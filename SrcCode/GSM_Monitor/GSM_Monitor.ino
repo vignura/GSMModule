@@ -3,17 +3,18 @@
 
 /* control macros */
 #define PRINT_DEBUG
+// #define ENABLE_WARNING
 
 /* pin mappings */
 #define RELAY_OUT_PIN       13  
-#define RELAY_FEDBK_PIN     A1
-#define BATT_MON_PIN        A0
+#define RELAY_FEDBK_PIN     A0
+#define BATT_MON_PIN        A2
 #define PULSE_SENSE_PIN     2 // or 3
 #define GSM_TX_PIN          9
 #define GSM_RX_PIN          10
 
 /* command strings and IDs */
-#define GSM_RING_STR                            "RING"
+#define GSM_RING_STR                            "\r\nRING"
 
 #define CMD_INVALID_CMD_ID                      (-1)
 #define CMD_GSM_CALL_RECV_ID                    0x01
@@ -33,7 +34,8 @@
 #define GSM_SERIAL_READ_DELAY_MS                0x02
 
 // ATDxxxxxxxxxx; -- watch out here for semicolon at the end!!
-#define GSM_CONTACT_NUMBER                      "9940398991" 
+#define GSM_CONTACT_NUMBER                      "9880303867" 
+#define GSM_RECEIVE_NUMBER                      "6384215939" 
 #define MAX_OFFSTATE_TIME_SECONDS               (1800UL)
 #define LOW_BATT_THRESHOLD                      500
 #define SENSE_MONITOR_PERIOD_SEC                10
@@ -123,13 +125,13 @@ void loop() {
     #endif
 
     /* print bytes */
-    printBytes(arrcCmd, iReadBytes);
+    // printBytes(arrcCmd, iReadBytes);
 
     // validate the command
     if(isValidCmd(arrcCmd, iReadBytes, &iCmdID) == true)
     {
       // if valid command is received, process it
-      CmdProcess(iCmdID, g_arrcGSMMsg);
+      // CmdProcess(iCmdID, g_arrcGSMMsg);
       
       // SS_GSM.println(g_arrcGSMMsg);
     }
@@ -452,6 +454,7 @@ void ProcessWarning(int iWarnID)
       return;
   }
 
+#ifdef ENABLE_WARNING
   /* send consecutive warnings with atleast WARNING_PERIOD_MIN  interval inbetween */
   if((g_bSendWarning == false) && ((millis() - g_ulWarStartTime_ms) / (1000UL * 60UL) > WARNING_PERIOD_MIN) )
   {
@@ -470,6 +473,7 @@ void ProcessWarning(int iWarnID)
     g_bSendWarning = false;
     g_ulWarStartTime_ms = millis();
   }
+#endif
 }
 
 /***********************************************************************************************/
