@@ -122,6 +122,9 @@ void loop() {
       Serial.println(g_arrcMsg);
     #endif
 
+    /* print bytes */
+    printBytes(arrcCmd, iReadBytes);
+
     // validate the command
     if(isValidCmd(arrcCmd, iReadBytes, &iCmdID) == true)
     {
@@ -613,4 +616,28 @@ void SendMessage(const char *PhNumber, const char *Message)
   delay(100);
   SS_GSM.println((char)26);// ASCII code of CTRL+Z
   delay(1000);
+}
+
+/***********************************************************************************************/
+/*! 
+* \fn         :: printBytes()
+* \author     :: Vignesh S
+* \date       :: 06-Jun-2020
+* \brief      :: This function each character in hexadecimal form
+* \param[in]  :: array
+* \param[in]  :: Size
+* \param[out] :: None
+* \return     :: None
+*/
+/***********************************************************************************************/
+void printBytes(char *array, int iSize)
+{
+  for(int i = 0; i < iSize; i++)
+  {
+    #ifdef PRINT_DEBUG
+      memset(g_arrcMsg, 0, sizeof(g_arrcMsg));
+      snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "[%d]: 0x%x[%c]", i, array[i], array[i]);
+      Serial.println(g_arrcMsg);
+    #endif
+  }
 }
