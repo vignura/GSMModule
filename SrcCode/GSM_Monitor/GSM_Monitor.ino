@@ -3,7 +3,7 @@
 
 /* control macros */
 #define PRINT_DEBUG
-// #define ENABLE_WARNING
+#define ENABLE_WARNING
 
 /* pin mappings */
 #define RELAY_OUT_PIN       13  
@@ -35,7 +35,7 @@
 
 // ATDxxxxxxxxxx; -- watch out here for semicolon at the end!!
 // CLIP: "+916384215939",145,"",,"",0"
-#define GSM_CONTACT_NUMBER_1                    "9880303867" 
+#define GSM_CONTACT_NUMBER_1                    "9940398991" 
 #define GSM_CONTACT_NUMBER_2                    "6384215939"
 #define MAX_CONTACT_NUMBERS_STORED              2
 
@@ -43,7 +43,7 @@
 #define LOW_BATT_THRESHOLD                      500
 #define SENSE_MONITOR_PERIOD_SEC                10
 #define SENSE_PULSE_PER_PERIOD                  1
-#define CALL_TIMEOUT_SEC                        10
+#define CALL_TIMEOUT_SEC                        30
 #define WARNING_PERIOD_MIN                      (30)
 
 Relay Rly(RELAY_OUT_PIN, RELAY_ON, true /* active low is true */);
@@ -64,12 +64,14 @@ bool g_bSendWarning = true;
 #endif
 
 char g_arrcGSMMsg[MAX_CMD_STRING_SIZE] = {0};
+char g_arrcMsgTxt[MAX_CMD_STRING_SIZE] = {0};
 
 /* pulse count */
 volatile unsigned long g_vulPulseCount = 0;
 
 /* contact numbers */
-char ContactNumbers[MAX_CONTACT_NUMBERS_STORED][11] = {GSM_CONTACT_NUMBER_1, GSM_CONTACT_NUMBER_2}; 
+char ContactNumbers[MAX_CONTACT_NUMBERS_STORED][11] = {GSM_CONTACT_NUMBER_1, GSM_CONTACT_NUMBER_2};
+uint8_t g_MatchIndex = 0; 
 
 /***********************************************************************************************/
 /*! 
@@ -306,6 +308,7 @@ bool isVaildCaller(char *parrcCmd, int iCmdLen)
     #endif
     if (StrnCmp(&parrcCmd[13], ContactNumbers[iIndex], 10) == true)
     {
+      g_MatchIndex = iIndex;
       #ifdef PRINT_DEBUG
         snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE,"Match found");
         Serial.println(g_arrcMsg);
@@ -378,6 +381,19 @@ void CmdProcess(int iCmdID, char *pResponse)
       #endif
       
       Rly.ToggleState();
+      
+      /* send message */
+      if(Rly.getState() == RELAY_ON)
+      {
+        snprintf(g_arrcMsgTxt, MAX_CMD_STRING_SIZE, "%s", "System is ON");
+      }
+      else
+      {
+        snprintf(g_arrcMsgTxt, MAX_CMD_STRING_SIZE, "%s", "System is OFF");
+      }
+      
+      SendMessage(ContactNumbers[g_MatchIndex], g_arrcMsgTxt);
+
     break;
 
     case CMD_GSM_INVALID_CALL_RECV_ID:
@@ -463,16 +479,16 @@ void ProcessWarning(int iWarnID)
   switch(iWarnID)
   {
     case OFF_STATE_WARNING:
-      snprintf(g_arrcGSMMsg, MAX_CMD_STRING_SIZE, "System is OFF for more than %d minutes", 
+      snprintf(g_arrcMsgTxt, MAX_CMD_STRING_SIZE, "System is OFF for more than %d minutes", 
               (MAX_OFFSTATE_TIME_SECONDS / 60));
     break;
 
     case LOW_BATT_WARNING:
-      snprintf(g_arrcGSMMsg, MAX_CMD_STRING_SIZE, "Low Battery WARNING...!");
+      snprintf(g_arrcMsgTxt, MAX_CMD_STRING_SIZE, "Low Battery WARNING...!");
     break;
 
     case SENSE_WARNING:
-      snprintf(g_arrcGSMMsg, MAX_CMD_STRING_SIZE, "Sense Input WARNING...!");
+      snprintf(g_arrcMsgTxt, MAX_CMD_STRING_SIZE, "Sense Input WARNING...!");
     break;
 
     deafult:
@@ -488,12 +504,16 @@ void ProcessWarning(int iWarnID)
   
   if(g_bSendWarning == true)
   {
-    /* call and hangup */
-    MakeCall(GSM_CONTACT_NUMBER);
-    delay(CALL_TIMEOUT_SEC * 1000UL);
-
     /* send message */
-    SendMessage(GSM_CONTACT_NUMBER, g_arrcGSMMsg);
+    for(int i = 0; i < MAX_CONTACT_NUMBERS_STORED; i++)
+    {
+      /* call and hangup */
+      MakeCall(ContactNumbers[i]);
+      delay(CALL_TIMEOUT_SEC * 1000UL);
+      HangupCall();
+      
+      SendMessage(ContactNumbers[i], g_arrcMsgTxt);
+    }
 
     g_bSendWarning = false;
     g_ulWarStartTime_ms = millis();
@@ -571,10 +591,10 @@ bool detectSensePin()
 /***********************************************************************************************/
 void MakeCall(const char *PhNumber)
 {
-  snprintf(g_arrcGSMMsg, MAX_CMD_STRING_SIZE, "ATD+%s;", PhNumber);
+  snprintf(g_arrcGSMMsg, MAX_CMD_STRING_SIZE, "ATD+91%s;", PhNumber);
   SS_GSM.println(g_arrcGSMMsg);
   #ifdef PRINT_DEBUG
-    snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Calling %s\n", PhNumber);
+    snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Calling cmd: %s\n", g_arrcGSMMsg);
     Serial.println(g_arrcMsg);
   #endif
 }
@@ -671,6 +691,11 @@ void SendMessage(const char *PhNumber, const char *Message)
   snprintf(g_arrcGSMMsg, MAX_CMD_STRING_SIZE, "AT+CMGS=\"+91%s\"\r", PhNumber);
   SS_GSM.println(g_arrcGSMMsg); 
   delay(1000);
+
+  #ifdef PRINT_DEBUG
+    snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Sending: %s", Message);
+    Serial.println(g_arrcMsg);
+  #endif
 
   SS_GSM.println(Message);// The SMS text you want to send
   delay(100);
