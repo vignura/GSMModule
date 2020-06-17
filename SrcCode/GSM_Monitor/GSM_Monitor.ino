@@ -80,7 +80,11 @@ void setup() {
   /* intialize pulse sense pin for interrupt */
   attachInterrupt(digitalPinToInterrupt(PULSE_SENSE_PIN), PulseSense_ISR, RISING);
 
+  /* init GSM module */
   SS_GSM.begin(GSM_BAUDRATE);
+
+  /* Enable caller ID */
+  EnableCallerId(true);
 
   /* intialize GSM serial port */
   #ifdef PRINT_DEBUG
@@ -593,6 +597,37 @@ void ReceiveCall()
     snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Receiving Call\n");
     Serial.println(g_arrcMsg);
   #endif
+}
+
+/***********************************************************************************************/
+/*! 
+* \fn         :: EnableCallerId()
+* \author     :: Vignesh S
+* \date       :: 18-Jun-2020
+* \brief      :: This function enables or disables caller iD
+* \param[in]  :: None
+* \param[out] :: None
+* \return     :: None
+*/
+/***********************************************************************************************/
+void EnableCallerId(bool state)
+{
+  if(state == true)
+  {
+    SS_GSM.println("AT+CLIP=1\r");
+    #ifdef PRINT_DEBUG
+      snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Caller ID enabled");
+      Serial.println(g_arrcMsg);
+    #endif
+  }
+  else
+  {
+    SS_GSM.println("AT+CLIP=1\r");
+    #ifdef PRINT_DEBUG
+      snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Caller ID disabled");
+      Serial.println(g_arrcMsg);
+    #endif
+  }
 }
 
 /***********************************************************************************************/
