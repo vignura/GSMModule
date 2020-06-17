@@ -34,8 +34,11 @@
 #define GSM_SERIAL_READ_DELAY_MS                0x02
 
 // ATDxxxxxxxxxx; -- watch out here for semicolon at the end!!
-#define GSM_CONTACT_NUMBER                      "9880303867" 
-#define GSM_RECEIVE_NUMBER                      "6384215939" 
+// CLIP: "+916384215939",145,"",,"",0"
+#define GSM_CONTACT_NUMBER_1                    "9880303867" 
+#define GSM_CONTACT_NUMBER_2                    "6384215939"
+#define MAX_CONTACT_NUMBERS_STORED              2
+
 #define MAX_OFFSTATE_TIME_SECONDS               (1800UL)
 #define LOW_BATT_THRESHOLD                      500
 #define SENSE_MONITOR_PERIOD_SEC                10
@@ -64,6 +67,9 @@ char g_arrcGSMMsg[MAX_CMD_STRING_SIZE] = {0};
 
 /* pulse count */
 volatile unsigned long g_vulPulseCount = 0;
+
+/* contact numbers */
+char ContactNumbers[MAX_CONTACT_NUMBERS_STORED][11] = {GSM_CONTACT_NUMBER_1, GSM_CONTACT_NUMBER_2}; 
 
 /***********************************************************************************************/
 /*! 
@@ -288,11 +294,17 @@ bool isValidCmd(char *parrcCmd, int iCmdLen, int *out_iCmdID)
 /***********************************************************************************************/
 bool isVaildCaller(char *parrcCmd, int iCmdLen)
 {
-  if (StrnCmp(parrcCmd, GSM_CONTACT_NUMBER, strlen(GSM_CONTACT_NUMBER)) == true)
-  {
-    return true;
-  }
+  int iIndex = 0;
+  int iRet = 0;
 
+  for(iIndex = 0; iIndex < MAX_CONTACT_NUMBERS_STORED; iIndex)
+  {
+    // iRet = snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "\r\nCLIP: "+91%snprintf",145,"",,"",0", ContactNumbers);
+    if (StrnCmp(&parrcCmd[12], ContactNumbers[iIndex], sizeof(ContactNumbers[iIndex])) == true)
+    {
+      return true;
+    }
+  }
   return false;
 }
 
