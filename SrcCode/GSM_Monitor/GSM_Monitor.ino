@@ -36,15 +36,16 @@
 // ATDxxxxxxxxxx; -- watch out here for semicolon at the end!!
 // CLIP: "+916384215939",145,"",,"",0"
 #define GSM_CONTACT_NUMBER_1                    "9940398991" 
-#define GSM_CONTACT_NUMBER_2                    "6384215939"
+#define GSM_CONTACT_NUMBER_2                    "9543807286"
 #define MAX_CONTACT_NUMBERS_STORED              2
 
 #define MAX_OFFSTATE_TIME_SECONDS               (1800UL)
-#define LOW_BATT_THRESHOLD                      500
+#define LOW_BATT_THRESHOLD                      200
 #define SENSE_MONITOR_PERIOD_SEC                10
 #define SENSE_PULSE_PER_PERIOD                  1
-#define CALL_TIMEOUT_SEC                        30
+#define CALL_TIMEOUT_SEC                        10
 #define WARNING_PERIOD_MIN                      (30)
+#define LOW_BAT_MAX_ADC_SAMPLES                 5
 
 Relay Rly(RELAY_OUT_PIN, RELAY_ON, true /* active low is true */);
 SoftwareSerial SS_GSM(GSM_TX_PIN, GSM_RX_PIN);
@@ -85,8 +86,11 @@ uint8_t g_MatchIndex = 0;
 /***********************************************************************************************/
 void setup() {
  
+  /* set the sense pin to input pullup */
+  pinMode(PULSE_SENSE_PIN, INPUT_PULLUP);
+  
   /* intialize pulse sense pin for interrupt */
-  attachInterrupt(digitalPinToInterrupt(PULSE_SENSE_PIN), PulseSense_ISR, RISING);
+  attachInterrupt(digitalPinToInterrupt(PULSE_SENSE_PIN), PulseSense_ISR, CHANGE);
 
   /* init GSM module */
   SS_GSM.begin(GSM_BAUDRATE);
@@ -171,6 +175,7 @@ void loop() {
     ProcessWarning(SENSE_WARNING);
   }
 
+  delay(1000);
 }
 
 
@@ -504,16 +509,27 @@ void ProcessWarning(int iWarnID)
   
   if(g_bSendWarning == true)
   {
+    /* disable caller ID */
+    EnableCallerId(false);
+
     /* send message */
     for(int i = 0; i < MAX_CONTACT_NUMBERS_STORED; i++)
     {
       /* call and hangup */
       MakeCall(ContactNumbers[i]);
       delay(CALL_TIMEOUT_SEC * 1000UL);
+
       HangupCall();
       
+      /* send message */
       SendMessage(ContactNumbers[i], g_arrcMsgTxt);
+
+      /* delay */
+      delay(2000);
     }
+
+    /* disable caller ID */
+    EnableCallerId(true);
 
     g_bSendWarning = false;
     g_ulWarStartTime_ms = millis();
@@ -537,12 +553,24 @@ bool detectLowBatt()
   int iBattVolt = 0;
   bool LowBattState = false;
 
-  iBattVolt = analogRead(BATT_MON_PIN);
+  /* average over LOW_BAT_MAX_ADC_SAMPLES */
+  for(int  i = 0; i < LOW_BAT_MAX_ADC_SAMPLES; i++)
+  {
+    iBattVolt += analogRead(BATT_MON_PIN);
+    delay(5);
+  }
+
+  iBattVolt /= LOW_BAT_MAX_ADC_SAMPLES;
 
   if(iBattVolt < LOW_BATT_THRESHOLD)
   {
     LowBattState = true;
   }
+
+  // #ifdef PRINT_DEBUG
+  //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Bat Voltage: %d", iBattVolt);
+  //   Serial.println(g_arrcMsg);
+  // #endif
 
   return LowBattState;
 }
@@ -561,17 +589,24 @@ bool detectLowBatt()
 bool detectSensePin()
 {
   bool SenseState = false;
+  unsigned long CurTime = (millis() / 1000);
 
   /* monitor pulse count for every cycle */
-  if((millis() / 1000) % SENSE_MONITOR_PERIOD_SEC)
+  if((CurTime > 0) && (CurTime % SENSE_MONITOR_PERIOD_SEC) == 0)
   {
     if(g_vulPulseCount < SENSE_PULSE_PER_PERIOD)
     {
       SenseState = true;
     }
 
+    #ifdef PRINT_DEBUG
+      snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "[%d sec] Pulse Count: %d", CurTime, g_vulPulseCount);
+      Serial.println(g_arrcMsg);
+    #endif
+
     /* reset the count */
     g_vulPulseCount = 0;
+
   }
 
   return SenseState;
@@ -669,6 +704,9 @@ void EnableCallerId(bool state)
       Serial.println(g_arrcMsg);
     #endif
   }
+
+  /* delay for mode switch */
+  delay(2000);
 }
 
 /***********************************************************************************************/
@@ -693,7 +731,7 @@ void SendMessage(const char *PhNumber, const char *Message)
   delay(1000);
 
   #ifdef PRINT_DEBUG
-    snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Sending: %s", Message);
+    snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Sending: %s to %s", Message, PhNumber);
     Serial.println(g_arrcMsg);
   #endif
 
