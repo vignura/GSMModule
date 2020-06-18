@@ -3,7 +3,7 @@
 
 /* control macros */
 #define PRINT_DEBUG
-#define ENABLE_WARNING
+// #define ENABLE_WARNING
 
 /* pin mappings */
 #define RELAY_OUT_PIN       13  
@@ -42,7 +42,7 @@
 #define MAX_OFFSTATE_TIME_SECONDS               (1800UL)
 #define LOW_BATT_THRESHOLD                      200
 #define SENSE_MONITOR_PERIOD_SEC                10
-#define SENSE_PULSE_PER_PERIOD                  1
+#define SENSE_PULSE_PER_PERIOD                  5
 #define CALL_TIMEOUT_SEC                        10
 #define WARNING_PERIOD_MIN                      (30)
 #define LOW_BAT_MAX_ADC_SAMPLES                 5
@@ -69,6 +69,9 @@ char g_arrcMsgTxt[MAX_CMD_STRING_SIZE] = {0};
 
 /* pulse count */
 volatile unsigned long g_vulPulseCount = 0;
+/* initializing to HIGH as this pin will be pulled up */
+byte g_PrePinState = HIGH;
+unsigned long g_ulPreTime = 0;
 
 /* contact numbers */
 char ContactNumbers[MAX_CONTACT_NUMBERS_STORED][11] = {GSM_CONTACT_NUMBER_1, GSM_CONTACT_NUMBER_2};
@@ -90,7 +93,7 @@ void setup() {
   pinMode(PULSE_SENSE_PIN, INPUT_PULLUP);
   
   /* intialize pulse sense pin for interrupt */
-  attachInterrupt(digitalPinToInterrupt(PULSE_SENSE_PIN), PulseSense_ISR, CHANGE);
+  // attachInterrupt(digitalPinToInterrupt(PULSE_SENSE_PIN), PulseSense_ISR, CHANGE);
 
   /* init GSM module */
   SS_GSM.begin(GSM_BAUDRATE);
@@ -175,7 +178,7 @@ void loop() {
     ProcessWarning(SENSE_WARNING);
   }
 
-  delay(1000);
+  // delay(1000);
 }
 
 
@@ -589,10 +592,25 @@ bool detectLowBatt()
 bool detectSensePin()
 {
   bool SenseState = false;
+  byte pinState = 0;
   unsigned long CurTime = (millis() / 1000);
 
+  /* detect low */
+  pinState = digitalRead(PULSE_SENSE_PIN);
+
+  /* increment the pulse count if previous state is not equal to current state */
+  if(g_PrePinState != pinState)
+  {
+    g_vulPulseCount++;
+  }
+
+  // #ifdef PRINT_DEBUG
+  //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d Pulse: %d", g_PrePinState, pinState, g_vulPulseCount);
+  //   Serial.println(g_arrcMsg);
+  // #endif
+
   /* monitor pulse count for every cycle */
-  if((CurTime > 0) && (CurTime % SENSE_MONITOR_PERIOD_SEC) == 0)
+  if((CurTime > 0) && ((CurTime % SENSE_MONITOR_PERIOD_SEC) == 0) && (CurTime != g_ulPreTime))
   {
     if(g_vulPulseCount < SENSE_PULSE_PER_PERIOD)
     {
@@ -600,7 +618,8 @@ bool detectSensePin()
     }
 
     #ifdef PRINT_DEBUG
-      snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "[%d sec] Pulse Count: %d", CurTime, g_vulPulseCount);
+      // snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "[%d sec] Pulse Count: %d", CurTime, g_vulPulseCount);
+      snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Pulse Count: %d", g_vulPulseCount);
       Serial.println(g_arrcMsg);
     #endif
 
@@ -608,6 +627,10 @@ bool detectSensePin()
     g_vulPulseCount = 0;
 
   }
+
+  /* assign current pin state previous state */
+  g_PrePinState = pinState;
+  g_ulPreTime = CurTime;
 
   return SenseState;
 }
