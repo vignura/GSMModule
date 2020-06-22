@@ -6,19 +6,23 @@
 // #define ENABLE_WARNING
 
 /* pin mappings */
-#define RELAY_OUT_PIN       13  
+#define RELAY_OUT_PIN       12  
 #define RELAY_FEDBK_PIN     A0
 #define BATT_MON_PIN        A2
 #define PULSE_SENSE_PIN     2 // or 3
 #define GSM_TX_PIN          9
 #define GSM_RX_PIN          10
+#define GSM_POWER_KEY       11
 
 /* command strings and IDs */
-#define GSM_RING_STR                            "\r\n+CLIP"
+#define GSM_RING_STR                            "\r\nRING"
+#define GSM_CALL_ID_STR                         "\r\n+CLIP"
+#define GSM_POWER_DOWN_STR                      "NORMAL POWER DOWN"
 
 #define CMD_INVALID_CMD_ID                      (-1)
 #define CMD_GSM_CALL_RECV_ID                    0x01
 #define CMD_GSM_INVALID_CALL_RECV_ID            0x02
+#define CMD_GSM_POWER_DOWN_ID                   0x03
 
 /* warnings */
 #define OFF_STATE_WARNING                       0x01
@@ -33,11 +37,17 @@
 #define DEBUG_BAUDRATE                          9600
 #define GSM_SERIAL_READ_DELAY_MS                0x02
 
+/* sense pin event types */
+#define SENSE_EVENT_PULSE_COUNT                 0x01
+#define SENSE_EVENT_LOW_TO_HIGH                 0x02
+#define SELECTED_SENSE_EVENT                    SENSE_EVENT_PULSE_COUNT
+
 // ATDxxxxxxxxxx; -- watch out here for semicolon at the end!!
 // CLIP: "+916384215939",145,"",,"",0"
 #define GSM_CONTACT_NUMBER_1                    "9940398991" 
 #define GSM_CONTACT_NUMBER_2                    "9543807286"
-#define MAX_CONTACT_NUMBERS_STORED              2
+#define GSM_CONTACT_NUMBER_3                    "9880303867"
+#define MAX_CONTACT_NUMBERS_STORED              3
 
 #define MAX_OFFSTATE_TIME_SECONDS               (1800UL)
 #define LOW_BATT_THRESHOLD                      200
@@ -46,6 +56,7 @@
 #define CALL_TIMEOUT_SEC                        10
 #define WARNING_PERIOD_MIN                      (30)
 #define LOW_BAT_MAX_ADC_SAMPLES                 5
+#define GSM_POWER_KEY_PULSE_TIME_MS             (2000)
 
 Relay Rly(RELAY_OUT_PIN, RELAY_ON, true /* active low is true */);
 SoftwareSerial SS_GSM(GSM_TX_PIN, GSM_RX_PIN);
@@ -74,7 +85,7 @@ byte g_PrePinState = HIGH;
 unsigned long g_ulPreTime = 0;
 
 /* contact numbers */
-char ContactNumbers[MAX_CONTACT_NUMBERS_STORED][11] = {GSM_CONTACT_NUMBER_1, GSM_CONTACT_NUMBER_2};
+char ContactNumbers[MAX_CONTACT_NUMBERS_STORED][11] = {GSM_CONTACT_NUMBER_1, GSM_CONTACT_NUMBER_2, GSM_CONTACT_NUMBER_3};
 uint8_t g_MatchIndex = 0; 
 
 /***********************************************************************************************/
@@ -91,6 +102,13 @@ void setup() {
  
   /* set the sense pin to input pullup */
   pinMode(PULSE_SENSE_PIN, INPUT_PULLUP);
+
+  /* set the GSM_POWER_KEY to output */
+  /* the GSM module needs a LOW 
+    pulse on GSM_POWER_KEY for 2 seconds 
+    every startup */
+  pinMode(GSM_POWER_KEY, OUTPUT);
+  GSM_PowerUpDown();
   
   /* intialize pulse sense pin for interrupt */
   // attachInterrupt(digitalPinToInterrupt(PULSE_SENSE_PIN), PulseSense_ISR, CHANGE);
@@ -160,6 +178,7 @@ void loop() {
     }
   }
 
+#if 1
   /* off state detection */
   if(detectOFFState(MAX_OFFSTATE_TIME_SECONDS))
   {
@@ -173,11 +192,11 @@ void loop() {
   }
 
   /* Sense Pin detection */
-  if(detectSensePin())
+  if(detectSensePin(SELECTED_SENSE_EVENT))
   {
     ProcessWarning(SENSE_WARNING);
   }
-
+#endif
   // delay(1000);
 }
 
@@ -259,7 +278,15 @@ bool isValidCmd(char *parrcCmd, int iCmdLen, int *out_iCmdID)
     return false;
   }
 
-  if (StrnCmp(parrcCmd, GSM_RING_STR, strlen(GSM_RING_STR)) == true)
+  /* for every call GSM_RING_STR will received followed by GSM_CALL_ID_STR 
+  in some cases, the both strings would be received as single message and in other
+  cases both will be received as seperate strings, we only need GSM_CALL_ID_STR string 
+  to validate the caller ID, hence if both strings are received as seperate messages, 
+  we could process the GSM_CALL_ID_STR and discard the GSM_RING_STR, but when they are
+  received as a single mesage, then we need to process the GSM_RING_STR also hence a
+  case for GSM_RING_STR is added after GSM_CALL_ID_STR */
+
+  if (StrnCmp(parrcCmd, GSM_CALL_ID_STR, strlen(GSM_CALL_ID_STR)) == true)
   {
     #ifdef PRINT_DEBUG
       snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Call Received");
@@ -276,6 +303,51 @@ bool isValidCmd(char *parrcCmd, int iCmdLen, int *out_iCmdID)
       *out_iCmdID = CMD_GSM_INVALID_CALL_RECV_ID;
     }
     
+    return true;
+  }
+  else if (StrnCmp(parrcCmd, GSM_RING_STR, strlen(GSM_RING_STR)) == true)
+  {
+    /* GSM_RING_STR followed by \r\n - 8 chars 
+       GSM_CALL_ID_STR followed by contact number - 13 + 10 chars
+       total =  31 chars [followed by additional info] */
+      if(iCmdLen < 31)
+      {
+        #ifdef PRINT_DEBUG
+          snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Inavlid String: %s", parrcCmd);
+          Serial.println(g_arrcMsg);
+        #endif
+
+        *out_iCmdID = CMD_GSM_INVALID_CALL_RECV_ID;
+      }
+      else
+      {
+        #ifdef PRINT_DEBUG
+          snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Call Received");
+          Serial.println(g_arrcMsg);
+        #endif
+
+        /* validate caller */
+        /* remove the eight bytes ie GSM_RING_STR followed by \r\n 
+           and pass the string */
+        if(isVaildCaller(&parrcCmd[8], iCmdLen))
+        {
+          *out_iCmdID = CMD_GSM_CALL_RECV_ID;
+        }
+        else
+        {
+          *out_iCmdID = CMD_GSM_INVALID_CALL_RECV_ID;
+        }
+      }
+      
+      return true;
+  }
+  else if(detectGSMPowerDown(parrcCmd, iCmdLen))
+  {
+    #ifdef PRINT_DEBUG
+      snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Power Down Cmd: %s", parrcCmd);
+      Serial.println(g_arrcMsg);
+    #endif
+    *out_iCmdID = CMD_GSM_POWER_DOWN_ID;
     return true;
   }
   else
@@ -403,6 +475,25 @@ void CmdProcess(int iCmdID, char *pResponse)
       SendMessage(ContactNumbers[g_MatchIndex], g_arrcMsgTxt);
 
     break;
+
+    case CMD_GSM_POWER_DOWN_ID:
+
+      /* power up the GSM module */
+      #ifdef PRINT_DEBUG
+        snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "GSM Power Down detected");
+        Serial.println(g_arrcMsg);
+      #endif
+
+      /* power up the GSM module */
+      #ifdef PRINT_DEBUG
+        snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Powering up GSM module");
+        Serial.println(g_arrcMsg);
+      #endif
+
+      GSM_PowerUpDown();
+
+    break;
+
 
     case CMD_GSM_INVALID_CALL_RECV_ID:
       /* don't answer the call just hangup */
@@ -584,54 +675,83 @@ bool detectLowBatt()
 * \author     :: Vignesh S
 * \date       :: 02-Jun-2020
 * \brief      :: This function processes pulse generated by sense pin 
-* \param[in]  :: None
+* \param[in]  :: iEventType (pulse count or level trigger)
 * \param[out] :: None
 * \return     :: true | false
 */
 /***********************************************************************************************/
-bool detectSensePin()
+bool detectSensePin(int iEventType)
 {
   bool SenseState = false;
   byte pinState = 0;
   unsigned long CurTime = (millis() / 1000);
 
-  /* detect low */
-  pinState = digitalRead(PULSE_SENSE_PIN);
-
-  /* increment the pulse count if previous state is not equal to current state */
-  if(g_PrePinState != pinState)
+  switch(iEventType)
   {
-    g_vulPulseCount++;
+    case SENSE_EVENT_PULSE_COUNT:
+
+      /* detect low */
+      pinState = digitalRead(PULSE_SENSE_PIN);
+
+      /* increment the pulse count if previous state is not equal to current state */
+      if(g_PrePinState != pinState)
+      {
+        g_vulPulseCount++;
+      }
+
+      // #ifdef PRINT_DEBUG
+      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d Pulse: %d", g_PrePinState, pinState, g_vulPulseCount);
+      //   Serial.println(g_arrcMsg);
+      // #endif
+
+      /* monitor pulse count for every cycle */
+      if((CurTime > 0) && ((CurTime % SENSE_MONITOR_PERIOD_SEC) == 0) && (CurTime != g_ulPreTime))
+      {
+        if(g_vulPulseCount < SENSE_PULSE_PER_PERIOD)
+        {
+          SenseState = true;
+        }
+
+        // #ifdef PRINT_DEBUG
+        //   // snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "[%d sec] Pulse Count: %d", CurTime, g_vulPulseCount);
+        //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Pulse Count: %d", g_vulPulseCount);
+        //   Serial.println(g_arrcMsg);
+        // #endif
+
+        /* reset the count */
+        g_vulPulseCount = 0;
+
+      }
+
+      /* assign current pin state previous state */
+      g_PrePinState = pinState;
+      g_ulPreTime = CurTime;
+
+    break;
+
+    case SENSE_EVENT_LOW_TO_HIGH:
+
+      /* detect low */
+      pinState = digitalRead(PULSE_SENSE_PIN);
+
+      // #ifdef PRINT_DEBUG
+      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d", g_PrePinState, pinState);
+      //   Serial.println(g_arrcMsg);
+      // #endif
+
+      if((g_PrePinState == LOW) && (pinState == HIGH))
+      {
+        SenseState = true;
+      }
+      
+      /* assign current pin state previous state */
+      g_PrePinState = pinState;
+
+    break;
+
+    default:
+    ;
   }
-
-  // #ifdef PRINT_DEBUG
-  //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d Pulse: %d", g_PrePinState, pinState, g_vulPulseCount);
-  //   Serial.println(g_arrcMsg);
-  // #endif
-
-  /* monitor pulse count for every cycle */
-  if((CurTime > 0) && ((CurTime % SENSE_MONITOR_PERIOD_SEC) == 0) && (CurTime != g_ulPreTime))
-  {
-    if(g_vulPulseCount < SENSE_PULSE_PER_PERIOD)
-    {
-      SenseState = true;
-    }
-
-    #ifdef PRINT_DEBUG
-      // snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "[%d sec] Pulse Count: %d", CurTime, g_vulPulseCount);
-      snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Pulse Count: %d", g_vulPulseCount);
-      Serial.println(g_arrcMsg);
-    #endif
-
-    /* reset the count */
-    g_vulPulseCount = 0;
-
-  }
-
-  /* assign current pin state previous state */
-  g_PrePinState = pinState;
-  g_ulPreTime = CurTime;
-
   return SenseState;
 }
 
@@ -786,4 +906,75 @@ void printBytes(char *array, int iSize)
       Serial.println(g_arrcMsg);
     #endif
   }
+}
+
+/***********************************************************************************************/
+/*! 
+* \fn         :: GSM_PowerUpDown()
+* \author     :: Vignesh S
+* \date       :: 22-Jun-2020
+* \brief      :: This function toggles the GSM_POWER_KEY
+* \param[in]  :: none
+* \param[in]  :: None
+* \param[out] :: None
+* \return     :: None
+*/
+/***********************************************************************************************/
+void GSM_PowerUpDown()
+{
+  delay(GSM_POWER_KEY_PULSE_TIME_MS / 2);
+  digitalWrite(GSM_POWER_KEY, HIGH);
+  delay(GSM_POWER_KEY_PULSE_TIME_MS);
+  digitalWrite(GSM_POWER_KEY, LOW);  
+  delay(GSM_POWER_KEY_PULSE_TIME_MS / 2);
+}
+
+/***********************************************************************************************/
+/*! 
+* \fn         :: detectGSMPowerDown()
+* \author     :: Vignesh S
+* \date       :: 22-Jun-2020
+* \brief      :: This function detectes power down 
+* \param[in]  :: none
+* \param[in]  :: None
+* \param[out] :: None
+* \return     :: None
+*/
+/***********************************************************************************************/
+bool detectGSMPowerDown(char *string, int iSize)
+{
+  char testStr[] = GSM_POWER_DOWN_STR;
+  
+  // #ifdef PRINT_DEBUG
+  //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "CMP: %s CMP Size:%d", string, iSize);
+  //   Serial.println(g_arrcMsg);
+  // #endif
+  
+  if(iSize < strlen(testStr))
+  {
+    return false;    
+  }
+
+  for(int i = 0; i < (iSize - strlen(testStr)); i++)
+  {
+    // #ifdef PRINT_DEBUG
+    //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "[%d] CMP: %c and %c", i, string[i], testStr[0]);
+    //   Serial.println(g_arrcMsg);
+    // #endif
+
+    if(string[i] == testStr[0])
+    {
+      if(StrnCmp(&string[i], testStr, strlen(testStr)))
+      {
+        // #ifdef PRINT_DEBUG
+        //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "[%d] CMP: %s matches %s", i, &string[i], testStr);
+        //   Serial.println(g_arrcMsg);
+        // #endif
+
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
