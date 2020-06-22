@@ -40,6 +40,7 @@
 /* sense pin event types */
 #define SENSE_EVENT_PULSE_COUNT                 0x01
 #define SENSE_EVENT_LOW_TO_HIGH                 0x02
+#define SENSE_EVENT_HIGH_TO_LOW                 0x03
 #define SELECTED_SENSE_EVENT                    SENSE_EVENT_PULSE_COUNT
 
 // ATDxxxxxxxxxx; -- watch out here for semicolon at the end!!
@@ -740,6 +741,26 @@ bool detectSensePin(int iEventType)
       // #endif
 
       if((g_PrePinState == LOW) && (pinState == HIGH))
+      {
+        SenseState = true;
+      }
+      
+      /* assign current pin state previous state */
+      g_PrePinState = pinState;
+
+    break;
+
+    case SENSE_EVENT_HIGH_TO_LOW:
+
+      /* detect HIGH */
+      pinState = digitalRead(PULSE_SENSE_PIN);
+
+      // #ifdef PRINT_DEBUG
+      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d", g_PrePinState, pinState);
+      //   Serial.println(g_arrcMsg);
+      // #endif
+
+      if((g_PrePinState == HIGH) && (pinState == LOW))
       {
         SenseState = true;
       }
