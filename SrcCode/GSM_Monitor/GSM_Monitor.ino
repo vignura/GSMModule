@@ -103,13 +103,6 @@ void setup() {
  
   /* set the sense pin to input pullup */
   pinMode(PULSE_SENSE_PIN, INPUT_PULLUP);
-
-  /* set the GSM_POWER_KEY to output */
-  /* the GSM module needs a LOW 
-    pulse on GSM_POWER_KEY for 2 seconds 
-    every startup */
-  pinMode(GSM_POWER_KEY, OUTPUT);
-  GSM_PowerUpDown();
   
   /* intialize pulse sense pin for interrupt */
   // attachInterrupt(digitalPinToInterrupt(PULSE_SENSE_PIN), PulseSense_ISR, CHANGE);
@@ -125,6 +118,13 @@ void setup() {
     /* initalize debug port */
     Serial.begin(DEBUG_BAUDRATE);
   #endif
+
+  /* set the GSM_POWER_KEY to output */
+  /* the GSM module needs a LOW 
+    pulse on GSM_POWER_KEY for 2 seconds 
+    every startup */
+  pinMode(GSM_POWER_KEY, OUTPUT);
+  GSM_PowerUpDown();
 
   #ifdef PRINT_DEBUG
       snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "INIT Success");
@@ -687,6 +687,12 @@ bool detectSensePin(int iEventType)
   byte pinState = 0;
   unsigned long CurTime = (millis() / 1000);
 
+  /* if system state is OFF then just return false */
+  if(Rly.getState() == RELAY_OFF)
+  {
+    return false;
+  }
+
   switch(iEventType)
   {
     case SENSE_EVENT_PULSE_COUNT:
@@ -773,6 +779,7 @@ bool detectSensePin(int iEventType)
     default:
     ;
   }
+
   return SenseState;
 }
 
