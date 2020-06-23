@@ -3,7 +3,7 @@
 
 /* control macros */
 #define PRINT_DEBUG
-// #define ENABLE_WARNING
+#define ENABLE_WARNING
 
 /* pin mappings */
 #define RELAY_OUT_PIN       12  
@@ -25,9 +25,10 @@
 #define CMD_GSM_POWER_DOWN_ID                   0x03
 
 /* warnings */
-#define OFF_STATE_WARNING                       0x01
-#define LOW_BATT_WARNING                        0x02
-#define SENSE_WARNING                           0x03
+#define OFF_STATE_WARNING                       0
+#define LOW_BATT_WARNING                        1
+#define SENSE_WARNING                           2
+#define MAX_WARNING_COUNT                       3
 
 /* system macros */
 #define MAX_DEBUG_MSG_SIZE                      128
@@ -41,7 +42,7 @@
 #define SENSE_EVENT_PULSE_COUNT                 0x01
 #define SENSE_EVENT_LOW_TO_HIGH                 0x02
 #define SENSE_EVENT_HIGH_TO_LOW                 0x03
-#define SELECTED_SENSE_EVENT                    SENSE_EVENT_PULSE_COUNT
+#define SELECTED_SENSE_EVENT                    SENSE_EVENT_LOW_TO_HIGH
 
 // ATDxxxxxxxxxx; -- watch out here for semicolon at the end!!
 // CLIP: "+916384215939",145,"",,"",0"
@@ -55,9 +56,13 @@
 #define SENSE_MONITOR_PERIOD_SEC                10
 #define SENSE_PULSE_PER_PERIOD                  5
 #define CALL_TIMEOUT_SEC                        10
-#define WARNING_PERIOD_MIN                      (30)
 #define LOW_BAT_MAX_ADC_SAMPLES                 5
 #define GSM_POWER_KEY_PULSE_TIME_MS             (2000)
+
+/* warning timeouts in minutes */
+#define OFFSTATE_WARNING_PERIOD_MIN             (30)
+#define LOWBAT_WARNING_PERIOD_MIN               (30)
+#define SENSE_WARNING_PERIOD_MIN                (2)
 
 Relay Rly(RELAY_OUT_PIN, RELAY_ON, true /* active low is true */);
 SoftwareSerial SS_GSM(GSM_TX_PIN, GSM_RX_PIN);
@@ -67,10 +72,10 @@ uint8_t g_PreState = Rly.getState();
 
 unsigned long g_ulOFFTime_ms = 0;
 unsigned long g_ulStartime_ms = 0;
-unsigned long g_ulWarStartTime_ms = 0;
+unsigned long g_ulWarStartTime_ms[MAX_WARNING_COUNT] = {0};
 
 /* set this to true by default */
-bool g_bSendWarning = true;
+int g_iSendWarning[MAX_WARNING_COUNT] = {true, true, true};
 
 #ifdef PRINT_DEBUG
   char g_arrcMsg[MAX_DEBUG_MSG_SIZE] = {0};
@@ -191,13 +196,14 @@ void loop() {
   {
     ProcessWarning(LOW_BATT_WARNING);
   }
+#endif
 
   /* Sense Pin detection */
   if(detectSensePin(SELECTED_SENSE_EVENT))
   {
     ProcessWarning(SENSE_WARNING);
   }
-#endif
+
   // delay(1000);
 }
 
@@ -581,54 +587,112 @@ void ProcessWarning(int iWarnID)
     case OFF_STATE_WARNING:
       snprintf(g_arrcMsgTxt, MAX_CMD_STRING_SIZE, "System is OFF for more than %d minutes", 
               (MAX_OFFSTATE_TIME_SECONDS / 60));
+      /* send consecutive warnings with atleast WARNING_PERIOD_MIN  interval inbetween */
+      
+      /* process OFF state warning */
+      if((g_iSendWarning[OFF_STATE_WARNING] == false) && ((millis() - g_ulWarStartTime_ms[OFF_STATE_WARNING]) / (1000UL * 60UL) > OFFSTATE_WARNING_PERIOD_MIN))
+      {
+        g_iSendWarning[OFF_STATE_WARNING] = true;
+      }
+      
+      if(g_iSendWarning[OFF_STATE_WARNING] == true)
+      {
+        SendWarning();
+
+        g_iSendWarning[OFF_STATE_WARNING] = false;
+        g_ulWarStartTime_ms[OFF_STATE_WARNING] = millis();
+      }
     break;
 
     case LOW_BATT_WARNING:
       snprintf(g_arrcMsgTxt, MAX_CMD_STRING_SIZE, "Low Battery WARNING...!");
+      
+      /* process Low battery warning */
+      if((g_iSendWarning[LOW_BATT_WARNING] == false) && ((millis() - g_ulWarStartTime_ms[LOW_BATT_WARNING]) / (1000UL * 60UL) > LOWBAT_WARNING_PERIOD_MIN))
+      {
+        g_iSendWarning[LOW_BATT_WARNING] = true;
+      }
+      
+      if(g_iSendWarning[LOW_BATT_WARNING] == true)
+      {
+        SendWarning();
+
+        g_iSendWarning[LOW_BATT_WARNING] = false;
+        g_ulWarStartTime_ms[LOW_BATT_WARNING] = millis();
+      }
     break;
 
     case SENSE_WARNING:
       snprintf(g_arrcMsgTxt, MAX_CMD_STRING_SIZE, "Sense Input WARNING...!");
+
+      /* process Sense warning */
+      if((g_iSendWarning[SENSE_WARNING] == false) && ((millis() - g_ulWarStartTime_ms[SENSE_WARNING]) / (1000UL * 60UL) > SENSE_WARNING_PERIOD_MIN))
+      {
+        g_iSendWarning[SENSE_WARNING] = true;
+      }
+      
+      if(g_iSendWarning[SENSE_WARNING] == true)
+      {
+        SendWarning();
+
+        g_iSendWarning[SENSE_WARNING] = false;
+        g_ulWarStartTime_ms[SENSE_WARNING] = millis();
+      }
     break;
 
     deafult:
       return;
   }
 
+  // #ifdef PRINT_DEBUG
+  //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "%s", g_arrcMsgTxt);
+  //   Serial.println(g_arrcMsg);
+  // #endif
+
+  // for(int i = 0; i < MAX_WARNING_COUNT; i++)
+  // {
+  //   #ifdef PRINT_DEBUG
+  //     snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "[%d] State: %d Start Time: %d sec", i, g_iSendWarning[i], (g_ulWarStartTime_ms[i] / 1000UL));
+  //     Serial.println(g_arrcMsg);
+  //   #endif
+  // }
+}
+
+/***********************************************************************************************/
+/*! 
+* \fn         :: SendWarning()
+* \author     :: Vignesh S
+* \date       :: 23-Jun-2020
+* \brief      :: This sends warnings call and warning messages
+* \param[in]  :: None
+* \param[out] :: None
+* \return     :: None
+*/
+/***********************************************************************************************/
+void SendWarning()
+{
 #ifdef ENABLE_WARNING
-  /* send consecutive warnings with atleast WARNING_PERIOD_MIN  interval inbetween */
-  if((g_bSendWarning == false) && ((millis() - g_ulWarStartTime_ms) / (1000UL * 60UL) > WARNING_PERIOD_MIN) )
-  {
-    g_bSendWarning = true;
-  }
-  
-  if(g_bSendWarning == true)
-  {
-    /* disable caller ID */
-    EnableCallerId(false);
+  /* disable caller ID */
+  EnableCallerId(false);
 
+  /* send message */
+  for(int i = 0; i < MAX_CONTACT_NUMBERS_STORED; i++)
+  {
+    /* call and hangup */
+    MakeCall(ContactNumbers[i]);
+    delay(CALL_TIMEOUT_SEC * 1000UL);
+
+    HangupCall();
+    
     /* send message */
-    for(int i = 0; i < MAX_CONTACT_NUMBERS_STORED; i++)
-    {
-      /* call and hangup */
-      MakeCall(ContactNumbers[i]);
-      delay(CALL_TIMEOUT_SEC * 1000UL);
+    SendMessage(ContactNumbers[i], g_arrcMsgTxt);
 
-      HangupCall();
-      
-      /* send message */
-      SendMessage(ContactNumbers[i], g_arrcMsgTxt);
-
-      /* delay */
-      delay(2000);
-    }
-
-    /* disable caller ID */
-    EnableCallerId(true);
-
-    g_bSendWarning = false;
-    g_ulWarStartTime_ms = millis();
+    /* delay */
+    delay(2000);
   }
+
+  /* disable caller ID */
+  EnableCallerId(true);
 #endif
 }
 
