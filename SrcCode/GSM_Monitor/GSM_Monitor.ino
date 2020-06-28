@@ -65,7 +65,7 @@
 
 #define CALL_TIMEOUT_SEC                        10
 #define GSM_POWER_KEY_PULSE_TIME_MS             (2000)
-#define MESSAGE_SEND_DELAY_MS                   (2000)
+#define MESSAGE_SEND_DELAY_MS                   (5000)
 
 /* warning timeouts in minutes */
 #define OFFSTATE_WARNING_PERIOD_MIN             (30)
@@ -507,12 +507,14 @@ void CmdProcess(int iCmdID, char *pResponse)
       /* wait before sending a message */
       delay(MESSAGE_SEND_DELAY_MS);
       SendMessage(ContactNumbers[g_MatchIndex], g_arrcMsgTxt);
+      delay(MESSAGE_SEND_DELAY_MS);
 
       #ifdef ENABLE_DEBUG_SMS
         /* send debug message */
-        snprintf(g_arrcMsgTxt, MAX_CMD_STRING_SIZE, "Cmd Str: %s", g_arrcCmd);
+        snprintf(g_arrcMsgTxt, MAX_CMD_STRING_SIZE, "Cmd Str: %s", g_arrcCmd);        
         delay(MESSAGE_SEND_DELAY_MS);
         SendMessage(ContactNumbers[g_MatchIndex], g_arrcMsgTxt);
+        delay(MESSAGE_SEND_DELAY_MS);
       #endif
 
     break;
