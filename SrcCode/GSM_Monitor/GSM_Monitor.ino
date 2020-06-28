@@ -3,7 +3,7 @@
 
 /* control macros */
 #define PRINT_DEBUG
-#define ENABLE_WARNING
+//#define ENABLE_WARNING
 
 /* pin mappings */
 #define RELAY_OUT_PIN       12  
@@ -42,7 +42,10 @@
 #define SENSE_EVENT_PULSE_COUNT                 0x01
 #define SENSE_EVENT_LOW_TO_HIGH                 0x02
 #define SENSE_EVENT_HIGH_TO_LOW                 0x03
-#define SELECTED_SENSE_EVENT                    SENSE_EVENT_LOW_TO_HIGH
+#define SENSE_EVENT_PIN_CHNAGE                  0x04
+#define SENSE_EVENT_LOW                         0x05
+#define SENSE_EVENT_HIGH                        0x06
+#define SELECTED_SENSE_EVENT                    SENSE_EVENT_LOW
 
 // ATDxxxxxxxxxx; -- watch out here for semicolon at the end!!
 // CLIP: "+916384215939",145,"",,"",0"
@@ -157,6 +160,7 @@ void loop() {
   char arrcCmd[MAX_CMD_STRING_SIZE] = {0};
   int iReadBytes = 0;
   int iCmdID = 0;
+  int iRet = 0;
 
   /* receive and process GSM commands */
   iReadBytes = RecvCmd(arrcCmd, MAX_CMD_STRING_SIZE); 
@@ -205,6 +209,16 @@ void loop() {
   }
 
   // delay(1000);
+
+  // iRet = getTimeString(g_arrcMsg, MAX_DEBUG_MSG_SIZE, millis());
+  // #ifdef PRINT_DEBUG
+  //   snprintf((g_arrcMsg + iRet), MAX_DEBUG_MSG_SIZE, " Time");
+  //   Serial.println(g_arrcMsg);
+  // #endif
+
+  // ProcessWarning(OFF_STATE_WARNING);
+  // ProcessWarning(LOW_BATT_WARNING);
+  // ProcessWarning(SENSE_WARNING);
 }
 
 
@@ -470,13 +484,15 @@ void CmdProcess(int iCmdID, char *pResponse)
       Rly.ToggleState();
       
       /* send message */
+      /* get system time */
+      iRetVal = getTimeString(g_arrcMsgTxt, MAX_CMD_STRING_SIZE, millis());
       if(Rly.getState() == RELAY_ON)
       {
-        snprintf(g_arrcMsgTxt, MAX_CMD_STRING_SIZE, "%s", "System is ON");
+        snprintf((g_arrcMsgTxt + iRetVal), MAX_CMD_STRING_SIZE, "%s", "System is ON");
       }
       else
       {
-        snprintf(g_arrcMsgTxt, MAX_CMD_STRING_SIZE, "%s", "System is OFF");
+        snprintf((g_arrcMsgTxt + iRetVal), MAX_CMD_STRING_SIZE, "%s", "System is OFF");
       }
       
       SendMessage(ContactNumbers[g_MatchIndex], g_arrcMsgTxt);
@@ -582,11 +598,18 @@ bool detectOFFState(unsigned long ulOFFTime_Sec)
 /***********************************************************************************************/
 void ProcessWarning(int iWarnID)
 {
+  int iRet = 0;
+
+  /* get time string */
+  iRet = getTimeString(g_arrcMsgTxt, MAX_CMD_STRING_SIZE, millis());
+
   switch(iWarnID)
   {
     case OFF_STATE_WARNING:
-      snprintf(g_arrcMsgTxt, MAX_CMD_STRING_SIZE, "System is OFF for more than %d minutes", 
+      iRet += snprintf((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, "System is OFF for more than %d minutes\nLast Warn ", 
               (MAX_OFFSTATE_TIME_SECONDS / 60));
+      iRet += getTimeString((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, g_ulWarStartTime_ms[OFF_STATE_WARNING]);
+
       /* send consecutive warnings with atleast WARNING_PERIOD_MIN  interval inbetween */
       
       /* process OFF state warning */
@@ -605,7 +628,8 @@ void ProcessWarning(int iWarnID)
     break;
 
     case LOW_BATT_WARNING:
-      snprintf(g_arrcMsgTxt, MAX_CMD_STRING_SIZE, "Low Battery WARNING...!");
+      iRet += snprintf((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, "Low Battery WARNING...!\nLast Warn ");
+      iRet += getTimeString((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, g_ulWarStartTime_ms[LOW_BATT_WARNING]);
       
       /* process Low battery warning */
       if((g_iSendWarning[LOW_BATT_WARNING] == false) && ((millis() - g_ulWarStartTime_ms[LOW_BATT_WARNING]) / (1000UL * 60UL) > LOWBAT_WARNING_PERIOD_MIN))
@@ -623,8 +647,8 @@ void ProcessWarning(int iWarnID)
     break;
 
     case SENSE_WARNING:
-      snprintf(g_arrcMsgTxt, MAX_CMD_STRING_SIZE, "Sense Input WARNING...!");
-
+      iRet += snprintf((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, "Sense Input WARNING...!\nLast Warn ");
+      iRet += getTimeString((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, g_ulWarStartTime_ms[SENSE_WARNING]);
       /* process Sense warning */
       if((g_iSendWarning[SENSE_WARNING] == false) && ((millis() - g_ulWarStartTime_ms[SENSE_WARNING]) / (1000UL * 60UL) > SENSE_WARNING_PERIOD_MIN))
       {
@@ -644,10 +668,10 @@ void ProcessWarning(int iWarnID)
       return;
   }
 
-  // #ifdef PRINT_DEBUG
-  //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "%s", g_arrcMsgTxt);
-  //   Serial.println(g_arrcMsg);
-  // #endif
+  #ifdef PRINT_DEBUG
+    snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "%s", g_arrcMsgTxt);
+    Serial.println(g_arrcMsg);
+  #endif
 
   // for(int i = 0; i < MAX_WARNING_COUNT; i++)
   // {
@@ -688,7 +712,7 @@ void SendWarning()
     SendMessage(ContactNumbers[i], g_arrcMsgTxt);
 
     /* delay */
-    delay(2000);
+    delay(5000);
   }
 
   /* disable caller ID */
@@ -822,7 +846,7 @@ bool detectSensePin(int iEventType)
 
     case SENSE_EVENT_HIGH_TO_LOW:
 
-      /* detect HIGH */
+      /* read pin state */
       pinState = digitalRead(PULSE_SENSE_PIN);
 
       // #ifdef PRINT_DEBUG
@@ -838,6 +862,60 @@ bool detectSensePin(int iEventType)
       /* assign current pin state previous state */
       g_PrePinState = pinState;
 
+    break;
+
+    case SENSE_EVENT_PIN_CHNAGE:
+
+      /* read pin state */
+      pinState = digitalRead(PULSE_SENSE_PIN);
+
+      // #ifdef PRINT_DEBUG
+      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d", g_PrePinState, pinState);
+      //   Serial.println(g_arrcMsg);
+      // #endif
+
+      if(g_PrePinState != pinState)
+      {
+        SenseState = true;
+      }
+      
+      /* assign current pin state previous state */
+      g_PrePinState = pinState;
+
+    break;
+
+    case SENSE_EVENT_LOW:
+
+      /* read pin state */
+      pinState = digitalRead(PULSE_SENSE_PIN);
+
+      // #ifdef PRINT_DEBUG
+      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d", g_PrePinState, pinState);
+      //   Serial.println(g_arrcMsg);
+      // #endif
+
+      if(pinState == LOW)
+      {
+        SenseState = true;
+      }
+
+    break;
+
+    case SENSE_EVENT_HIGH:
+
+      /* read pin state */
+      pinState = digitalRead(PULSE_SENSE_PIN);
+
+      // #ifdef PRINT_DEBUG
+      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d", g_PrePinState, pinState);
+      //   Serial.println(g_arrcMsg);
+      // #endif
+
+      if(pinState == HIGH)
+      {
+        SenseState = true;
+      }
+      
     break;
 
     default:
@@ -1028,7 +1106,6 @@ void GSM_PowerUpDown()
 * \date       :: 22-Jun-2020
 * \brief      :: This function detectes power down 
 * \param[in]  :: none
-* \param[in]  :: None
 * \param[out] :: None
 * \return     :: None
 */
@@ -1069,4 +1146,36 @@ bool detectGSMPowerDown(char *string, int iSize)
   }
 
   return false;
+}
+
+/***********************************************************************************************/
+/*! 
+* \fn         :: getTimeString()
+* \author     :: Vignesh S
+* \date       :: 28-Jun-2020
+* \brief      :: This function frames time from millis() in HH:MM:SS format
+* \param[in]  :: buffer
+* \param[in]  :: ulTime_Sec
+* \param[in]  :: iSize
+* \return     :: no of characters processed
+*/
+/***********************************************************************************************/
+int getTimeString(char *buffer, int iSize, unsigned long ulTime_ms)
+{
+  int iRet = 0;
+  int iHour = 0;
+  int iMin = 0;
+  int iSec = 0;
+  unsigned long ulTime_Sec = (ulTime_ms / 1000UL);
+
+  if(buffer == NULL)
+  {
+    return -1;
+  }
+
+  iHour = (int)((ulTime_Sec) / 3600UL);
+  iMin = (int)((ulTime_Sec - ((unsigned long)iHour * 3600UL)) / 60);
+  iSec = (int)(ulTime_Sec % 60);
+
+  return snprintf(buffer, iSize, "[%02d:%02d:%02d] ", iHour, iMin, iSec);
 }
