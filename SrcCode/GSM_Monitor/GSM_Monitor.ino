@@ -55,17 +55,22 @@
 #define MAX_CONTACT_NUMBERS_STORED              3
 
 #define MAX_OFFSTATE_TIME_SECONDS               (1800UL)
-#define LOW_BATT_THRESHOLD                      200
+
+#define LOW_BATT_THRESHOLD                      500
+#define LOW_BAT_MAX_ADC_SAMPLES                 5
+
 #define SENSE_MONITOR_PERIOD_SEC                10
 #define SENSE_PULSE_PER_PERIOD                  5
+#define SENSE_HIGH_LOW_COUNT                    30
+
 #define CALL_TIMEOUT_SEC                        10
-#define LOW_BAT_MAX_ADC_SAMPLES                 5
 #define GSM_POWER_KEY_PULSE_TIME_MS             (2000)
+#define MESSAGE_SEND_DELAY_MS                   (2000)
 
 /* warning timeouts in minutes */
 #define OFFSTATE_WARNING_PERIOD_MIN             (30)
 #define LOWBAT_WARNING_PERIOD_MIN               (30)
-#define SENSE_WARNING_PERIOD_MIN                (2)
+#define SENSE_WARNING_PERIOD_MIN                (30)
 
 Relay Rly(RELAY_OUT_PIN, RELAY_ON, true /* active low is true */);
 SoftwareSerial SS_GSM(GSM_TX_PIN, GSM_RX_PIN);
@@ -92,6 +97,7 @@ volatile unsigned long g_vulPulseCount = 0;
 /* initializing to HIGH as this pin will be pulled up */
 byte g_PrePinState = HIGH;
 unsigned long g_ulPreTime = 0;
+unsigned long g_ulPinStateCnt = 0;
 
 /* contact numbers */
 char ContactNumbers[MAX_CONTACT_NUMBERS_STORED][11] = {GSM_CONTACT_NUMBER_1, GSM_CONTACT_NUMBER_2, GSM_CONTACT_NUMBER_3};
@@ -495,6 +501,8 @@ void CmdProcess(int iCmdID, char *pResponse)
         snprintf((g_arrcMsgTxt + iRetVal), MAX_CMD_STRING_SIZE, "%s", "System is OFF");
       }
       
+      /* wait before sending a message */
+      delay(MESSAGE_SEND_DELAY_MS);
       SendMessage(ContactNumbers[g_MatchIndex], g_arrcMsgTxt);
 
     break;
@@ -890,14 +898,27 @@ bool detectSensePin(int iEventType)
       pinState = digitalRead(PULSE_SENSE_PIN);
 
       // #ifdef PRINT_DEBUG
-      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d", g_PrePinState, pinState);
+      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d Cnt: %d", g_PrePinState, pinState, g_ulPinStateCnt);
       //   Serial.println(g_arrcMsg);
       // #endif
 
-      if(pinState == LOW)
+      if((pinState == LOW) && (g_PrePinState == LOW))
       {
+        g_ulPinStateCnt++;
+      }
+      else
+      {
+        g_ulPinStateCnt = 0;
+      }
+
+      if(g_ulPinStateCnt >= SENSE_HIGH_LOW_COUNT)
+      {
+        g_ulPinStateCnt = 0;
         SenseState = true;
       }
+
+      /* assign current pin state previous state */
+      g_PrePinState = pinState;
 
     break;
 
@@ -907,14 +928,27 @@ bool detectSensePin(int iEventType)
       pinState = digitalRead(PULSE_SENSE_PIN);
 
       // #ifdef PRINT_DEBUG
-      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d", g_PrePinState, pinState);
+      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d Cnt: %d", g_PrePinState, pinState, g_ulPinStateCnt);
       //   Serial.println(g_arrcMsg);
       // #endif
 
-      if(pinState == HIGH)
+      if((pinState == HIGH) && (g_PrePinState == HIGH))
       {
+        g_ulPinStateCnt++;
+      }
+      else
+      {
+        g_ulPinStateCnt = 0;
+      }
+
+      if(g_ulPinStateCnt >= SENSE_HIGH_LOW_COUNT)
+      {
+        g_ulPinStateCnt = 0;
         SenseState = true;
       }
+
+      /* assign current pin state previous state */
+      g_PrePinState = pinState;
       
     break;
 
@@ -1179,3 +1213,4 @@ int getTimeString(char *buffer, int iSize, unsigned long ulTime_ms)
 
   return snprintf(buffer, iSize, "[%02d:%02d:%02d] ", iHour, iMin, iSec);
 }
+
