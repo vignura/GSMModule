@@ -3,7 +3,8 @@
 
 /* control macros */
 #define PRINT_DEBUG
-//#define ENABLE_WARNING
+#define ENABLE_WARNING
+#define ENABLE_DEBUG_SMS
 
 /* pin mappings */
 #define RELAY_OUT_PIN       12  
@@ -45,14 +46,13 @@
 #define SENSE_EVENT_PIN_CHNAGE                  0x04
 #define SENSE_EVENT_LOW                         0x05
 #define SENSE_EVENT_HIGH                        0x06
-#define SELECTED_SENSE_EVENT                    SENSE_EVENT_LOW
+#define SELECTED_SENSE_EVENT                    SENSE_EVENT_HIGH
 
 // ATDxxxxxxxxxx; -- watch out here for semicolon at the end!!
 // CLIP: "+916384215939",145,"",,"",0"
-#define GSM_CONTACT_NUMBER_1                    "9940398991" 
-#define GSM_CONTACT_NUMBER_2                    "9543807286"
-#define GSM_CONTACT_NUMBER_3                    "9880303867"
-#define MAX_CONTACT_NUMBERS_STORED              3
+#define GSM_CONTACT_NUMBER_1                    "9880303867"
+#define GSM_CONTACT_NUMBER_2                    "9940398991" 
+#define MAX_CONTACT_NUMBERS_STORED              2
 
 #define MAX_OFFSTATE_TIME_SECONDS               (1800UL)
 
@@ -89,6 +89,7 @@ int g_iSendWarning[MAX_WARNING_COUNT] = {true, true, true};
   char g_arrcMsg[MAX_DEBUG_MSG_SIZE] = {0};
 #endif
 
+char g_arrcCmd[MAX_CMD_STRING_SIZE] = {0};
 char g_arrcGSMMsg[MAX_CMD_STRING_SIZE] = {0};
 char g_arrcMsgTxt[MAX_CMD_STRING_SIZE] = {0};
 
@@ -100,7 +101,7 @@ unsigned long g_ulPreTime = 0;
 unsigned long g_ulPinStateCnt = 0;
 
 /* contact numbers */
-char ContactNumbers[MAX_CONTACT_NUMBERS_STORED][11] = {GSM_CONTACT_NUMBER_1, GSM_CONTACT_NUMBER_2, GSM_CONTACT_NUMBER_3};
+char ContactNumbers[MAX_CONTACT_NUMBERS_STORED][11] = {GSM_CONTACT_NUMBER_1, GSM_CONTACT_NUMBER_2};
 uint8_t g_MatchIndex = 0; 
 
 /***********************************************************************************************/
@@ -162,26 +163,28 @@ void setup() {
 */
 /***********************************************************************************************/
 void loop() {
-  
-  char arrcCmd[MAX_CMD_STRING_SIZE] = {0};
+
   int iReadBytes = 0;
   int iCmdID = 0;
   int iRet = 0;
 
+  /* memset the cmmand array */
+  memset(g_arrcCmd, 0, sizeof(g_arrcCmd));
+
   /* receive and process GSM commands */
-  iReadBytes = RecvCmd(arrcCmd, MAX_CMD_STRING_SIZE); 
+  iReadBytes = RecvCmd(g_arrcCmd, MAX_CMD_STRING_SIZE); 
   if(iReadBytes > 0)
   {
     #ifdef PRINT_DEBUG
-      snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Received: [%d] %s", iReadBytes, arrcCmd);
+      snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Received: [%d] %s", iReadBytes, g_arrcCmd);
       Serial.println(g_arrcMsg);
     #endif
 
     /* print bytes */
-    // printBytes(arrcCmd, iReadBytes);
+    // printBytes(g_arrcCmd, iReadBytes);
 
     // validate the command
-    if(isValidCmd(arrcCmd, iReadBytes, &iCmdID) == true)
+    if(isValidCmd(g_arrcCmd, iReadBytes, &iCmdID) == true)
     {
       // if valid command is received, process it
       CmdProcess(iCmdID, g_arrcGSMMsg);
@@ -505,6 +508,13 @@ void CmdProcess(int iCmdID, char *pResponse)
       delay(MESSAGE_SEND_DELAY_MS);
       SendMessage(ContactNumbers[g_MatchIndex], g_arrcMsgTxt);
 
+      #ifdef ENABLE_DEBUG_SMS
+        /* send debug message */
+        snprintf(g_arrcMsgTxt, MAX_CMD_STRING_SIZE, "Cmd Str: %s", g_arrcCmd);
+        delay(MESSAGE_SEND_DELAY_MS);
+        SendMessage(ContactNumbers[g_MatchIndex], g_arrcMsgTxt);
+      #endif
+
     break;
 
     case CMD_GSM_POWER_DOWN_ID:
@@ -655,7 +665,7 @@ void ProcessWarning(int iWarnID)
     break;
 
     case SENSE_WARNING:
-      iRet += snprintf((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, "Sense Input WARNING...!\nLast Warn ");
+      iRet += snprintf((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, "Fence Warning...!\nLast Warn ");
       iRet += getTimeString((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, g_ulWarStartTime_ms[SENSE_WARNING]);
       /* process Sense warning */
       if((g_iSendWarning[SENSE_WARNING] == false) && ((millis() - g_ulWarStartTime_ms[SENSE_WARNING]) / (1000UL * 60UL) > SENSE_WARNING_PERIOD_MIN))
