@@ -5,12 +5,19 @@
 #define PRINT_DEBUG
 #define ENABLE_WARNING
 #define ENABLE_DEBUG_SMS
+#define ENABLE_STATUS_SMS
 
 /* pin mappings */
+/* Relay Pins */
 #define RELAY_OUT_PIN       12  
 #define RELAY_FEDBK_PIN     A0
+/* Battery Monitering pin */
 #define BATT_MON_PIN        A2
-#define PULSE_SENSE_PIN     2 // or 3
+/* sense pins */
+#define SENSE_PIN_8KV       2
+#define SENSE_PIN_6KV       3
+#define MAX_SENSE_PIN_COUNT 2
+/* GSM Pins */
 #define GSM_TX_PIN          9
 #define GSM_RX_PIN          10
 #define GSM_POWER_KEY       11
@@ -28,8 +35,9 @@
 /* warnings */
 #define OFF_STATE_WARNING                       0
 #define LOW_BATT_WARNING                        1
-#define SENSE_WARNING                           2
-#define MAX_WARNING_COUNT                       3
+#define SENSE_WARNING_8KV                       2
+#define SENSE_WARNING_6KV                       3
+#define MAX_WARNING_COUNT                       4
 
 /* system macros */
 #define MAX_DEBUG_MSG_SIZE                      128
@@ -46,7 +54,8 @@
 #define SENSE_EVENT_PIN_CHNAGE                  0x04
 #define SENSE_EVENT_LOW                         0x05
 #define SENSE_EVENT_HIGH                        0x06
-#define SELECTED_SENSE_EVENT                    SENSE_EVENT_HIGH
+#define SELECTED_SENSE_EVENT_8KV                SENSE_EVENT_HIGH
+#define SELECTED_SENSE_EVENT_6KV                SENSE_EVENT_HIGH
 
 // ATDxxxxxxxxxx; -- watch out here for semicolon at the end!!
 // CLIP: "+916384215939",145,"",,"",0"
@@ -58,6 +67,7 @@
 
 #define LOW_BATT_THRESHOLD                      500
 #define LOW_BAT_MAX_ADC_SAMPLES                 5
+#define BATT_VOLT_SCALING_FACTOR                (1.0f)
 
 #define SENSE_MONITOR_PERIOD_SEC                10
 #define SENSE_PULSE_PER_PERIOD                  5
@@ -70,7 +80,9 @@
 /* warning timeouts in minutes */
 #define OFFSTATE_WARNING_PERIOD_MIN             (30)
 #define LOWBAT_WARNING_PERIOD_MIN               (30)
-#define SENSE_WARNING_PERIOD_MIN                (30)
+#define SENSE_WARNING_8KV_PERIOD_MIN            (30) /* LOW Priority */
+#define SENSE_WARNING_6KV_PERIOD_MIN            (30) /* HIGH Priority */
+#define STATUS_SMS_PERIOD_HOUR                  (01)
 
 Relay Rly(RELAY_OUT_PIN, RELAY_ON, true /* active low is true */);
 SoftwareSerial SS_GSM(GSM_TX_PIN, GSM_RX_PIN);
@@ -78,12 +90,15 @@ SoftwareSerial SS_GSM(GSM_TX_PIN, GSM_RX_PIN);
 uint8_t g_CurState = Rly.getState();
 uint8_t g_PreState = Rly.getState();
 
+unsigned int g_uiBattVolt = 0;
 unsigned long g_ulOFFTime_ms = 0;
 unsigned long g_ulStartime_ms = 0;
 unsigned long g_ulWarStartTime_ms[MAX_WARNING_COUNT] = {0};
+unsigned int g_uiLastStatusTime_hr = 0;
 
 /* set this to true by default */
-int g_iSendWarning[MAX_WARNING_COUNT] = {true, true, true};
+int g_iSendWarning[MAX_WARNING_COUNT] = {true};
+unsigned int g_uiWarningCnt[MAX_WARNING_COUNT] = {0};
 
 #ifdef PRINT_DEBUG
   char g_arrcMsg[MAX_DEBUG_MSG_SIZE] = {0};
@@ -93,12 +108,11 @@ char g_arrcCmd[MAX_CMD_STRING_SIZE] = {0};
 char g_arrcGSMMsg[MAX_CMD_STRING_SIZE] = {0};
 char g_arrcMsgTxt[MAX_CMD_STRING_SIZE] = {0};
 
-/* pulse count */
-volatile unsigned long g_vulPulseCount = 0;
-/* initializing to HIGH as this pin will be pulled up */
-byte g_PrePinState = HIGH;
-unsigned long g_ulPreTime = 0;
-unsigned long g_ulPinStateCnt = 0;
+/* Global Varibles used by detectSensePin() */
+byte g_PrePinState[MAX_SENSE_PIN_COUNT] = {HIGH};
+unsigned long g_ulPreTime[MAX_SENSE_PIN_COUNT] = {0};
+unsigned long g_ulPulseCount[MAX_SENSE_PIN_COUNT] = {0};
+unsigned long g_ulPinStateCnt[MAX_SENSE_PIN_COUNT] = {0};
 
 /* contact numbers */
 char ContactNumbers[MAX_CONTACT_NUMBERS_STORED][11] = {GSM_CONTACT_NUMBER_1, GSM_CONTACT_NUMBER_2};
@@ -115,13 +129,13 @@ uint8_t g_MatchIndex = 0;
 */
 /***********************************************************************************************/
 void setup() {
- 
-  /* set the sense pin to input pullup */
-  pinMode(PULSE_SENSE_PIN, INPUT_PULLUP);
   
-  /* intialize pulse sense pin for interrupt */
-  // attachInterrupt(digitalPinToInterrupt(PULSE_SENSE_PIN), PulseSense_ISR, CHANGE);
-
+  int iRet = 0;
+  
+  /* set the sense pin to input pullup */
+  pinMode(SENSE_PIN_8KV, INPUT_PULLUP);
+  pinMode(SENSE_PIN_6KV, INPUT_PULLUP);
+  
   /* init GSM module */
   SS_GSM.begin(GSM_BAUDRATE);
 
@@ -139,11 +153,15 @@ void setup() {
     pulse on GSM_POWER_KEY for 2 seconds 
     every startup */
   pinMode(GSM_POWER_KEY, OUTPUT);
-  GSM_PowerUpDown();
+  // GSM_PowerUpDown();
 
   #ifdef PRINT_DEBUG
-      snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "INIT Success");
-      Serial.println(g_arrcMsg);
+    /* get status string */
+    iRet = getStatusString(g_arrcMsgTxt, MAX_DEBUG_MSG_SIZE);
+    snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "%s [%d]", g_arrcMsgTxt, iRet);
+    Serial.println(g_arrcMsg);
+    snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "INIT Success");
+    Serial.println(g_arrcMsg);
   #endif
 
 }
@@ -211,40 +229,20 @@ void loop() {
   }
 #endif
 
-  /* Sense Pin detection */
-  if(detectSensePin(SELECTED_SENSE_EVENT))
+  /* Sense Pin detection on 8 KV - Low Priority */
+  if(detectSensePin(SELECTED_SENSE_EVENT_8KV, SENSE_PIN_8KV))
   {
-    ProcessWarning(SENSE_WARNING);
+    ProcessWarning(SENSE_WARNING_8KV);
   }
 
-  // delay(1000);
+  /* Sense Pin detection on 6 KV - High Priority */
+  if(detectSensePin(SELECTED_SENSE_EVENT_6KV, SENSE_PIN_6KV))
+  {
+    ProcessWarning(SENSE_WARNING_6KV);
+  }
 
-  // iRet = getTimeString(g_arrcMsg, MAX_DEBUG_MSG_SIZE, millis());
-  // #ifdef PRINT_DEBUG
-  //   snprintf((g_arrcMsg + iRet), MAX_DEBUG_MSG_SIZE, " Time");
-  //   Serial.println(g_arrcMsg);
-  // #endif
-
-  // ProcessWarning(OFF_STATE_WARNING);
-  // ProcessWarning(LOW_BATT_WARNING);
-  // ProcessWarning(SENSE_WARNING);
-}
-
-
-/***********************************************************************************************/
-/*! 
-* \fn         :: PulseSense_ISR()
-* \author     :: Vignesh S
-* \date       :: 02-Jun-2020
-* \brief      :: This function increment the global pulse count for every pulse received
-* \param[in]  :: None
-* \return     :: None
-*/
-/***********************************************************************************************/
-void PulseSense_ISR()
-{
-  /* increment the count for every pulse received */
-  g_vulPulseCount++;
+  /* send status SMS once every STATUS_SMS_PERIOD_HOUR */ 
+  sendStatusSMS(STATUS_SMS_PERIOD_HOUR);
 }
 
 /***********************************************************************************************/
@@ -641,6 +639,8 @@ void ProcessWarning(int iWarnID)
       if(g_iSendWarning[OFF_STATE_WARNING] == true)
       {
         SendWarning();
+        /* increment warning counter */
+        g_uiWarningCnt[OFF_STATE_WARNING]++;
 
         g_iSendWarning[OFF_STATE_WARNING] = false;
         g_ulWarStartTime_ms[OFF_STATE_WARNING] = millis();
@@ -660,27 +660,51 @@ void ProcessWarning(int iWarnID)
       if(g_iSendWarning[LOW_BATT_WARNING] == true)
       {
         SendWarning();
+        /* increment warning counter */
+        g_uiWarningCnt[LOW_BATT_WARNING]++;
 
         g_iSendWarning[LOW_BATT_WARNING] = false;
         g_ulWarStartTime_ms[LOW_BATT_WARNING] = millis();
       }
     break;
 
-    case SENSE_WARNING:
-      iRet += snprintf((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, "Fence Warning...!\nLast Warn ");
-      iRet += getTimeString((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, g_ulWarStartTime_ms[SENSE_WARNING]);
+    case SENSE_WARNING_8KV:
+      iRet += snprintf((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, "Fence Warning 8KV (Low Priority)...!\nLast Warn ");
+      iRet += getTimeString((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, g_ulWarStartTime_ms[SENSE_WARNING_8KV]);
       /* process Sense warning */
-      if((g_iSendWarning[SENSE_WARNING] == false) && ((millis() - g_ulWarStartTime_ms[SENSE_WARNING]) / (1000UL * 60UL) > SENSE_WARNING_PERIOD_MIN))
+      if((g_iSendWarning[SENSE_WARNING_8KV] == false) && ((millis() - g_ulWarStartTime_ms[SENSE_WARNING_8KV]) / (1000UL * 60UL) > SENSE_WARNING_8KV_PERIOD_MIN))
       {
-        g_iSendWarning[SENSE_WARNING] = true;
+        g_iSendWarning[SENSE_WARNING_8KV] = true;
       }
       
-      if(g_iSendWarning[SENSE_WARNING] == true)
+      if(g_iSendWarning[SENSE_WARNING_8KV] == true)
       {
         SendWarning();
+        /* increment warning counter */
+        g_uiWarningCnt[SENSE_WARNING_8KV]++;
 
-        g_iSendWarning[SENSE_WARNING] = false;
-        g_ulWarStartTime_ms[SENSE_WARNING] = millis();
+        g_iSendWarning[SENSE_WARNING_8KV] = false;
+        g_ulWarStartTime_ms[SENSE_WARNING_8KV] = millis();
+      }
+    break;
+
+    case SENSE_WARNING_6KV:
+      iRet += snprintf((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, "Fence Warning 6KV (High Priority)...!\nLast Warn ");
+      iRet += getTimeString((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, g_ulWarStartTime_ms[SENSE_WARNING_6KV]);
+      /* process Sense warning */
+      if((g_iSendWarning[SENSE_WARNING_6KV] == false) && ((millis() - g_ulWarStartTime_ms[SENSE_WARNING_6KV]) / (1000UL * 60UL) > SENSE_WARNING_6KV_PERIOD_MIN))
+      {
+        g_iSendWarning[SENSE_WARNING_6KV] = true;
+      }
+      
+      if(g_iSendWarning[SENSE_WARNING_6KV] == true)
+      {
+        SendWarning();
+        /* increment warning counter */
+        g_uiWarningCnt[SENSE_WARNING_6KV]++;
+
+        g_iSendWarning[SENSE_WARNING_6KV] = false;
+        g_ulWarStartTime_ms[SENSE_WARNING_6KV] = millis();
       }
     break;
 
@@ -753,25 +777,24 @@ void SendWarning()
 /***********************************************************************************************/
 bool detectLowBatt()
 {
-  int iBattVolt = 0;
   bool LowBattState = false;
 
   /* average over LOW_BAT_MAX_ADC_SAMPLES */
   for(int  i = 0; i < LOW_BAT_MAX_ADC_SAMPLES; i++)
   {
-    iBattVolt += analogRead(BATT_MON_PIN);
+    g_uiBattVolt += analogRead(BATT_MON_PIN);
     delay(5);
   }
 
-  iBattVolt /= LOW_BAT_MAX_ADC_SAMPLES;
+  g_uiBattVolt /= LOW_BAT_MAX_ADC_SAMPLES;
 
-  if(iBattVolt < LOW_BATT_THRESHOLD)
+  if(g_uiBattVolt < LOW_BATT_THRESHOLD)
   {
     LowBattState = true;
   }
 
   // #ifdef PRINT_DEBUG
-  //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Bat Voltage: %d", iBattVolt);
+  //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Bat Voltage: %d", g_uiBattVolt);
   //   Serial.println(g_arrcMsg);
   // #endif
 
@@ -789,11 +812,27 @@ bool detectLowBatt()
 * \return     :: true | false
 */
 /***********************************************************************************************/
-bool detectSensePin(int iEventType)
+bool detectSensePin(int iEventType, const int iSensePin)
 {
-  bool SenseState = false;
   byte pinState = 0;
+  int iIndex = 0;
+  bool SenseState = false;
   unsigned long CurTime = (millis() / 1000);
+
+  /* select iIndex based on pin */
+  switch(iSensePin)
+  {
+    case SENSE_PIN_8KV:
+      iIndex = 0;
+    break;
+
+    case SENSE_PIN_6KV:
+      iIndex = 1;
+    break;
+
+    default:
+    ;
+  }
 
   /* if system state is OFF then just return false */
   if(Rly.getState() == RELAY_OFF)
@@ -806,161 +845,161 @@ bool detectSensePin(int iEventType)
     case SENSE_EVENT_PULSE_COUNT:
 
       /* detect low */
-      pinState = digitalRead(PULSE_SENSE_PIN);
+      pinState = digitalRead(iSensePin);
 
       /* increment the pulse count if previous state is not equal to current state */
-      if(g_PrePinState != pinState)
+      if(g_PrePinState[iIndex] != pinState)
       {
-        g_vulPulseCount++;
+        g_ulPulseCount[iIndex]++;
       }
 
       // #ifdef PRINT_DEBUG
-      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d Pulse: %d", g_PrePinState, pinState, g_vulPulseCount);
+      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d Pulse: %d", g_PrePinState[iIndex], pinState, g_ulPulseCount[iIndex]);
       //   Serial.println(g_arrcMsg);
       // #endif
 
       /* monitor pulse count for every cycle */
-      if((CurTime > 0) && ((CurTime % SENSE_MONITOR_PERIOD_SEC) == 0) && (CurTime != g_ulPreTime))
+      if((CurTime > 0) && ((CurTime % SENSE_MONITOR_PERIOD_SEC) == 0) && (CurTime != g_ulPreTime[iIndex]))
       {
-        if(g_vulPulseCount < SENSE_PULSE_PER_PERIOD)
+        if(g_ulPulseCount[iIndex] < SENSE_PULSE_PER_PERIOD)
         {
           SenseState = true;
         }
 
         // #ifdef PRINT_DEBUG
-        //   // snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "[%d sec] Pulse Count: %d", CurTime, g_vulPulseCount);
-        //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Pulse Count: %d", g_vulPulseCount);
+        //   // snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "[%d sec] Pulse Count: %d", CurTime, g_ulPulseCount[iIndex]);
+        //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Pulse Count: %d", g_ulPulseCount[iIndex]);
         //   Serial.println(g_arrcMsg);
         // #endif
 
         /* reset the count */
-        g_vulPulseCount = 0;
+        g_ulPulseCount[iIndex] = 0;
 
       }
 
       /* assign current pin state previous state */
-      g_PrePinState = pinState;
-      g_ulPreTime = CurTime;
+      g_PrePinState[iIndex] = pinState;
+      g_ulPreTime[iIndex] = CurTime;
 
     break;
 
     case SENSE_EVENT_LOW_TO_HIGH:
 
       /* detect low */
-      pinState = digitalRead(PULSE_SENSE_PIN);
+      pinState = digitalRead(iSensePin);
 
       // #ifdef PRINT_DEBUG
-      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d", g_PrePinState, pinState);
+      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d", g_PrePinState[iIndex], pinState);
       //   Serial.println(g_arrcMsg);
       // #endif
 
-      if((g_PrePinState == LOW) && (pinState == HIGH))
+      if((g_PrePinState[iIndex] == LOW) && (pinState == HIGH))
       {
         SenseState = true;
       }
       
       /* assign current pin state previous state */
-      g_PrePinState = pinState;
+      g_PrePinState[iIndex] = pinState;
 
     break;
 
     case SENSE_EVENT_HIGH_TO_LOW:
 
       /* read pin state */
-      pinState = digitalRead(PULSE_SENSE_PIN);
+      pinState = digitalRead(iSensePin);
 
       // #ifdef PRINT_DEBUG
-      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d", g_PrePinState, pinState);
+      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d", g_PrePinState[iIndex], pinState);
       //   Serial.println(g_arrcMsg);
       // #endif
 
-      if((g_PrePinState == HIGH) && (pinState == LOW))
+      if((g_PrePinState[iIndex] == HIGH) && (pinState == LOW))
       {
         SenseState = true;
       }
       
       /* assign current pin state previous state */
-      g_PrePinState = pinState;
+      g_PrePinState[iIndex] = pinState;
 
     break;
 
     case SENSE_EVENT_PIN_CHNAGE:
 
       /* read pin state */
-      pinState = digitalRead(PULSE_SENSE_PIN);
+      pinState = digitalRead(iSensePin);
 
       // #ifdef PRINT_DEBUG
-      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d", g_PrePinState, pinState);
+      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d", g_PrePinState[iIndex], pinState);
       //   Serial.println(g_arrcMsg);
       // #endif
 
-      if(g_PrePinState != pinState)
+      if(g_PrePinState[iIndex] != pinState)
       {
         SenseState = true;
       }
       
       /* assign current pin state previous state */
-      g_PrePinState = pinState;
+      g_PrePinState[iIndex] = pinState;
 
     break;
 
     case SENSE_EVENT_LOW:
 
       /* read pin state */
-      pinState = digitalRead(PULSE_SENSE_PIN);
+      pinState = digitalRead(iSensePin);
 
       // #ifdef PRINT_DEBUG
-      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d Cnt: %d", g_PrePinState, pinState, g_ulPinStateCnt);
+      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d Cnt: %d", g_PrePinState[iIndex], pinState, g_ulPinStateCnt[iIndex]);
       //   Serial.println(g_arrcMsg);
       // #endif
 
-      if((pinState == LOW) && (g_PrePinState == LOW))
+      if((pinState == LOW) && (g_PrePinState[iIndex] == LOW))
       {
-        g_ulPinStateCnt++;
+        g_ulPinStateCnt[iIndex]++;
       }
       else
       {
-        g_ulPinStateCnt = 0;
+        g_ulPinStateCnt[iIndex] = 0;
       }
 
-      if(g_ulPinStateCnt >= SENSE_HIGH_LOW_COUNT)
+      if(g_ulPinStateCnt[iIndex] >= SENSE_HIGH_LOW_COUNT)
       {
-        g_ulPinStateCnt = 0;
+        g_ulPinStateCnt[iIndex] = 0;
         SenseState = true;
       }
 
       /* assign current pin state previous state */
-      g_PrePinState = pinState;
+      g_PrePinState[iIndex] = pinState;
 
     break;
 
     case SENSE_EVENT_HIGH:
 
       /* read pin state */
-      pinState = digitalRead(PULSE_SENSE_PIN);
+      pinState = digitalRead(iSensePin);
 
       // #ifdef PRINT_DEBUG
-      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d Cnt: %d", g_PrePinState, pinState, g_ulPinStateCnt);
+      //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Prev: %d Pin: %d Cnt: %d", g_PrePinState[iIndex], pinState, g_ulPinStateCnt[iIndex]);
       //   Serial.println(g_arrcMsg);
       // #endif
 
-      if((pinState == HIGH) && (g_PrePinState == HIGH))
+      if((pinState == HIGH) && (g_PrePinState[iIndex] == HIGH))
       {
-        g_ulPinStateCnt++;
+        g_ulPinStateCnt[iIndex]++;
       }
       else
       {
-        g_ulPinStateCnt = 0;
+        g_ulPinStateCnt[iIndex] = 0;
       }
 
-      if(g_ulPinStateCnt >= SENSE_HIGH_LOW_COUNT)
+      if(g_ulPinStateCnt[iIndex] >= SENSE_HIGH_LOW_COUNT)
       {
-        g_ulPinStateCnt = 0;
+        g_ulPinStateCnt[iIndex] = 0;
         SenseState = true;
       }
 
       /* assign current pin state previous state */
-      g_PrePinState = pinState;
+      g_PrePinState[iIndex] = pinState;
       
     break;
 
@@ -1090,7 +1129,9 @@ void SendMessage(const char *PhNumber, const char *Message)
   delay(1000);
 
   #ifdef PRINT_DEBUG
-    snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Sending: %s to %s", Message, PhNumber);
+    snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Sending to %s", PhNumber);
+    Serial.println(g_arrcMsg);
+    snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "%s", Message);
     Serial.println(g_arrcMsg);
   #endif
 
@@ -1203,7 +1244,7 @@ bool detectGSMPowerDown(char *string, int iSize)
 * \param[in]  :: buffer
 * \param[in]  :: ulTime_Sec
 * \param[in]  :: iSize
-* \return     :: no of characters processed
+* \return     :: number of characters processed
 */
 /***********************************************************************************************/
 int getTimeString(char *buffer, int iSize, unsigned long ulTime_ms)
@@ -1224,5 +1265,108 @@ int getTimeString(char *buffer, int iSize, unsigned long ulTime_ms)
   iSec = (int)(ulTime_Sec % 60);
 
   return snprintf(buffer, iSize, "[%02d:%02d:%02d] ", iHour, iMin, iSec);
+}
+
+/***********************************************************************************************/
+/*! 
+* \fn         :: getStatusString()
+* \author     :: Vignesh S
+* \date       :: 28-Jun-2020
+* \brief      :: This function frames system status string
+* \param[in]  :: buffer
+* \param[in]  :: iSize
+* \return     :: number of characters processed
+*/
+/***********************************************************************************************/
+int getStatusString(char *buffer, int iSize)
+{
+  int iRet = 0;
+  float fBatVoltage = 0;
+
+  if(buffer == NULL)
+  {
+    return -1;
+  }
+
+  iRet += getTimeString(buffer, iSize, millis());
+
+  iRet += snprintf((buffer + iRet), (iSize -iRet), "STATUS\n");
+    
+  /* Get System ON OFF status */
+  if(Rly.getState() == RELAY_ON)
+  {
+    iRet += snprintf((buffer + iRet), (iSize -iRet), "SYS ON\n");
+  }
+  else
+  {
+    iRet += snprintf((buffer + iRet), (iSize -iRet), "SYS OFF\n");
+  }
+
+  /* print battery voltage */
+  fBatVoltage = ((float)g_uiBattVolt * BATT_VOLT_SCALING_FACTOR);
+  iRet += snprintf((buffer + iRet), (iSize -iRet), "BAT %02d.%d%dV\n", 
+                    (int)fBatVoltage, /* integer part */
+                    ((int)(fBatVoltage * 10) % 10),/* first digit */
+                    ((int)(fBatVoltage * 100) % 10)); /* second digit */
+
+  /* print warning counts */
+  iRet += snprintf((buffer + iRet), (iSize -iRet), "WRN [OFF LBAT SEN8K SEN6K]\n");
+  iRet += snprintf((buffer + iRet), (iSize -iRet), "CNT [%4d %4d %4d %4d]\n", 
+                  g_uiWarningCnt[OFF_STATE_WARNING],
+                  g_uiWarningCnt[LOW_BATT_WARNING],
+                  g_uiWarningCnt[SENSE_WARNING_8KV],
+                  g_uiWarningCnt[SENSE_WARNING_6KV]);
+
+  /* print warning timeouts */
+  iRet += snprintf((buffer + iRet), (iSize -iRet), "TOT [%4d %4d %4d %4d]\n", 
+                  OFFSTATE_WARNING_PERIOD_MIN,
+                  LOWBAT_WARNING_PERIOD_MIN,
+                  SENSE_WARNING_8KV_PERIOD_MIN,
+                  SENSE_WARNING_6KV_PERIOD_MIN);
+  return iRet; 
+}
+
+/***********************************************************************************************/
+/*! 
+* \fn         :: sendStatusSMS()
+* \author     :: Vignesh S
+* \date       :: 28-Jun-2020
+* \brief      :: This function sends system status string to stored contacts
+* \param[in]  :: none
+* \param[out] :: none
+* \return     :: none
+*/
+/***********************************************************************************************/
+void sendStatusSMS(unsigned int uiPeroidHour)
+{
+#ifdef ENABLE_STATUS_SMS
+
+  int iRet = 0;
+  int iIndex = 0;
+  unsigned int uiTime_hr = (unsigned int)(millis() / (1000UL * 3600UL));
+
+  if((uiTime_hr != g_uiLastStatusTime_hr) && ((uiTime_hr % uiPeroidHour) == 0))
+  {
+    /* get status string */
+    iRet = getStatusString(g_arrcMsgTxt, MAX_CMD_STRING_SIZE);
+
+    /* send the to all contacts */
+    for(iIndex = 0; iIndex < MAX_CONTACT_NUMBERS_STORED; iIndex++)
+    {
+      SendMessage(ContactNumbers[iIndex], g_arrcMsgTxt);
+      delay(MESSAGE_SEND_DELAY_MS);
+    }
+
+    /* set last status sent time to current time */
+    g_uiLastStatusTime_hr = uiTime_hr;
+  }
+
+  // #ifdef PRINT_DEBUG
+  //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Ststus Size: %d Time: %d hr Last Time: %d hr",
+  //            iRet, uiTime_hr, g_uiLastStatusTime_hr);
+  //   Serial.println(g_arrcMsg);
+  // #endif
+
+#endif
 }
 
