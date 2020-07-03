@@ -60,14 +60,14 @@
 // ATDxxxxxxxxxx; -- watch out here for semicolon at the end!!
 // CLIP: "+916384215939",145,"",,"",0"
 #define GSM_CONTACT_NUMBER_1                    "9880303867"
-#define GSM_CONTACT_NUMBER_2                    "9940398991" 
+#define GSM_CONTACT_NUMBER_2                    "9543807282" 
 #define MAX_CONTACT_NUMBERS_STORED              2
 
 #define MAX_OFFSTATE_TIME_SECONDS               (1800UL)
 
 #define LOW_BATT_THRESHOLD                      500
 #define LOW_BAT_MAX_ADC_SAMPLES                 5
-#define BATT_VOLT_SCALING_FACTOR                (1.0f)
+#define BATT_VOLT_SCALING_FACTOR                (4.31f)
 
 #define SENSE_MONITOR_PERIOD_SEC                10
 #define SENSE_PULSE_PER_PERIOD                  5
@@ -80,9 +80,9 @@
 /* warning timeouts in minutes */
 #define OFFSTATE_WARNING_PERIOD_MIN             (30)
 #define LOWBAT_WARNING_PERIOD_MIN               (30)
-#define SENSE_WARNING_8KV_PERIOD_MIN            (30) /* LOW Priority */
+#define SENSE_WARNING_8KV_PERIOD_MIN            (300) /* LOW Priority */
 #define SENSE_WARNING_6KV_PERIOD_MIN            (30) /* HIGH Priority */
-#define STATUS_SMS_PERIOD_HOUR                  (01)
+#define STATUS_SMS_PERIOD_HOUR                  (12)
 
 Relay Rly(RELAY_OUT_PIN, RELAY_ON, true /* active low is true */);
 SoftwareSerial SS_GSM(GSM_TX_PIN, GSM_RX_PIN);
@@ -97,7 +97,7 @@ unsigned long g_ulWarStartTime_ms[MAX_WARNING_COUNT] = {0};
 unsigned int g_uiLastStatusTime_hr = 0;
 
 /* set this to true by default */
-int g_iSendWarning[MAX_WARNING_COUNT] = {true};
+int g_iSendWarning[MAX_WARNING_COUNT] = {0};
 unsigned int g_uiWarningCnt[MAX_WARNING_COUNT] = {0};
 
 #ifdef PRINT_DEBUG
@@ -153,7 +153,7 @@ void setup() {
     pulse on GSM_POWER_KEY for 2 seconds 
     every startup */
   pinMode(GSM_POWER_KEY, OUTPUT);
-  // GSM_PowerUpDown();
+  GSM_PowerUpDown();
 
   #ifdef PRINT_DEBUG
     /* get status string */
@@ -164,6 +164,12 @@ void setup() {
     Serial.println(g_arrcMsg);
   #endif
 
+  /* eanble warnings by default */
+  for(int i = 0; i < MAX_WARNING_COUNT; i++)
+  {
+    g_iSendWarning[i] = true;
+  }
+  
 }
 
 /***********************************************************************************************/
@@ -243,6 +249,14 @@ void loop() {
 
   /* send status SMS once every STATUS_SMS_PERIOD_HOUR */ 
   sendStatusSMS(STATUS_SMS_PERIOD_HOUR);
+
+  // #ifdef PRINT_DEBUG
+  //   /* get status string */
+  //   iRet = getStatusString(g_arrcMsgTxt, MAX_DEBUG_MSG_SIZE);
+  //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "%s [%d]", g_arrcMsgTxt);
+  //   Serial.println(g_arrcMsg);
+  // #endif
+
 }
 
 /***********************************************************************************************/
@@ -638,6 +652,11 @@ void ProcessWarning(int iWarnID)
       
       if(g_iSendWarning[OFF_STATE_WARNING] == true)
       {
+        // #ifdef PRINT_DEBUG
+        //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "OFF State: Sending warning");
+        //   Serial.println(g_arrcMsg);
+        // #endif
+
         SendWarning();
         /* increment warning counter */
         g_uiWarningCnt[OFF_STATE_WARNING]++;
@@ -659,6 +678,11 @@ void ProcessWarning(int iWarnID)
       
       if(g_iSendWarning[LOW_BATT_WARNING] == true)
       {
+        // #ifdef PRINT_DEBUG
+        //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Low batt: Sending warning");
+        //   Serial.println(g_arrcMsg);
+        // #endif
+
         SendWarning();
         /* increment warning counter */
         g_uiWarningCnt[LOW_BATT_WARNING]++;
@@ -669,7 +693,7 @@ void ProcessWarning(int iWarnID)
     break;
 
     case SENSE_WARNING_8KV:
-      iRet += snprintf((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, "Fence Warning 8KV (Low Priority)...!\nLast Warn ");
+      iRet += snprintf((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, "Mild Fence Warning 8KV (Low Priority)...!\nLast Warn ");
       iRet += getTimeString((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, g_ulWarStartTime_ms[SENSE_WARNING_8KV]);
       /* process Sense warning */
       if((g_iSendWarning[SENSE_WARNING_8KV] == false) && ((millis() - g_ulWarStartTime_ms[SENSE_WARNING_8KV]) / (1000UL * 60UL) > SENSE_WARNING_8KV_PERIOD_MIN))
@@ -679,6 +703,11 @@ void ProcessWarning(int iWarnID)
       
       if(g_iSendWarning[SENSE_WARNING_8KV] == true)
       {
+        // #ifdef PRINT_DEBUG
+        //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Sense 8K: Sending warning");
+        //   Serial.println(g_arrcMsg);
+        // #endif
+
         SendWarning();
         /* increment warning counter */
         g_uiWarningCnt[SENSE_WARNING_8KV]++;
@@ -689,7 +718,7 @@ void ProcessWarning(int iWarnID)
     break;
 
     case SENSE_WARNING_6KV:
-      iRet += snprintf((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, "Fence Warning 6KV (High Priority)...!\nLast Warn ");
+      iRet += snprintf((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, "Severe Fence Warning 6KV (High Priority)...!\nLast Warn ");
       iRet += getTimeString((g_arrcMsgTxt + iRet), MAX_CMD_STRING_SIZE, g_ulWarStartTime_ms[SENSE_WARNING_6KV]);
       /* process Sense warning */
       if((g_iSendWarning[SENSE_WARNING_6KV] == false) && ((millis() - g_ulWarStartTime_ms[SENSE_WARNING_6KV]) / (1000UL * 60UL) > SENSE_WARNING_6KV_PERIOD_MIN))
@@ -699,6 +728,10 @@ void ProcessWarning(int iWarnID)
       
       if(g_iSendWarning[SENSE_WARNING_6KV] == true)
       {
+        // #ifdef PRINT_DEBUG
+        //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "Sense 6K: Sending warning");
+        //   Serial.println(g_arrcMsg);
+        // #endif
         SendWarning();
         /* increment warning counter */
         g_uiWarningCnt[SENSE_WARNING_6KV]++;
@@ -712,10 +745,10 @@ void ProcessWarning(int iWarnID)
       return;
   }
 
-  #ifdef PRINT_DEBUG
-    snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "%s", g_arrcMsgTxt);
-    Serial.println(g_arrcMsg);
-  #endif
+  // #ifdef PRINT_DEBUG
+  //   snprintf(g_arrcMsg, MAX_DEBUG_MSG_SIZE, "%s", g_arrcMsgTxt);
+  //   Serial.println(g_arrcMsg);
+  // #endif
 
   // for(int i = 0; i < MAX_WARNING_COUNT; i++)
   // {
@@ -778,6 +811,9 @@ void SendWarning()
 bool detectLowBatt()
 {
   bool LowBattState = false;
+
+  /* clear the global variable */
+  g_uiBattVolt = 0;
 
   /* average over LOW_BAT_MAX_ADC_SAMPLES */
   for(int  i = 0; i < LOW_BAT_MAX_ADC_SAMPLES; i++)
@@ -1303,7 +1339,7 @@ int getStatusString(char *buffer, int iSize)
   }
 
   /* print battery voltage */
-  fBatVoltage = ((float)g_uiBattVolt * BATT_VOLT_SCALING_FACTOR);
+  fBatVoltage = ((float)g_uiBattVolt * (5.0f / 1024.0f) * BATT_VOLT_SCALING_FACTOR);
   iRet += snprintf((buffer + iRet), (iSize -iRet), "BAT %02d.%d%dV\n", 
                     (int)fBatVoltage, /* integer part */
                     ((int)(fBatVoltage * 10) % 10),/* first digit */
@@ -1369,4 +1405,3 @@ void sendStatusSMS(unsigned int uiPeroidHour)
 
 #endif
 }
-
