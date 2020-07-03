@@ -73,7 +73,7 @@
 #define SENSE_PULSE_PER_PERIOD                  5
 #define SENSE_HIGH_LOW_COUNT                    30
 
-#define CALL_TIMEOUT_SEC                        10
+#define CALL_TIMEOUT_SEC                        20
 #define GSM_POWER_KEY_PULSE_TIME_MS             (2000)
 #define MESSAGE_SEND_DELAY_MS                   (5000)
 
